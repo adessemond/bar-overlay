@@ -1,0 +1,4275 @@
+diff -uraN iscsitarget-1.4.20.2/ChangeLog iscsitarget-1.4.20.2-r481/ChangeLog
+--- iscsitarget-1.4.20.2/ChangeLog	2010-07-15 11:15:46.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/ChangeLog	2012-04-28 17:30:32.217271002 -0400
+@@ -1,10 +1,17 @@
+-Summary of changes from v1.4.20.1 to v1.4.20.2
++Summary of changes from v1.4.20 to Current
+ =================================
+ Arne Redlich
++  o adapt backward compat mechanism in Makefile to kernels >= 2.6.33
+   o uninitialized data fixes pointed out by valgrind
+   o fix invalid read in iSNS code pointed out by valgrind
++  o Fixed iSNS initialization issue, thanks to majianpeng@gmail.com
++  o The NIPQUAD macro has been removed, instead "%pI4" is used
++  o Converted semaphores to mutexes
++  o Fixed printing IPv4 addresses in /proc/net/iet/session for kernels >= 2.6.33
++  o Fixed block device handling for kernels >= 2.6.38
+ 
+ Ross Walker
++  o restore SCSI SN behaviour of IET < 1.4.20 (VMWare compatibility)
+   o check buffer boundaries in iSNS code (CVE-2010-2221)
+   o fix memleak in iSNS ACL code
+   o clean up iSCSI login response error handling
+@@ -12,15 +19,33 @@
+   o fix soft lockup during UA allocation
+   o change DISTDIR to DESTDIR
+   o avoid deletion of targets with active sessions
+-  o byte swap fix in MD5 / SHA1 code (thanks to Harshal Shete for testing on PPC)
++  o byte swap fix in MD5 / SHA1 code
++  o Updated initd scripts to reflect PID file name change
++  o Removed stray RPM build dependency on openssl from spec file
++  o Fixed crypto API error handling (ERR_PTR instead of a NULL)
++  o Fixed small memory leak in volume args buffer on BSD
++  o Fixed io context handling on kernels >= 2.6.25
++  o Fixed max_cmd_sn not being set for the session
++  o Fixed issue where StatSN was being updated when a command was ignored
++  o Fixed connection accounting in ietd for session reinstatements
++  o Fixed MaxOutStandingR2T handling
++  o Stripped zone id off ipv6 addresses in SendTargets
++  o Time2Retain fixed at 0 since it isn't implemented
+ 
+-Summary of changes from v1.4.20 to v1.4.20.1
+-=================================
+-Arne Redlich
+-  o adapt backward compat mechanism in Makefile to kernels >= 2.6.33
++Chris Siebenmann, Wido den Hollander
++  o 2.6.36 compile fix
+ 
+-Ross Walker
+-  o restore SCSI SN behaviour of IET < 1.4.20 (VMWare compatibility)
++Craig
++  o Makefile respects LDFLAGS
++
++Jason Zhang
++  o Fixed re-enabling listening after max connections was exceeded
++  o Fix NULL-pointer dereference due to race in UA handling
++
++Martin Hicks
++  o Added variable for depmod
++  o Don't install kernel module executable
++  o Don't use bash for initd script
+ 
+ Summary of changes from v1.4.19 to v1.4.20
+ =================================
+diff -uraN iscsitarget-1.4.20.2/Makefile iscsitarget-1.4.20.2-r481/Makefile
+--- iscsitarget-1.4.20.2/Makefile	2010-06-29 17:58:35.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/Makefile	2012-04-28 17:30:33.500256639 -0400
+@@ -9,6 +9,8 @@
+ 
+ #export KSRC := /usr/src/linux
+ 
++DEPMOD = depmod
++
+ SUBDIRS := $(shell pwd)
+ 
+ ifeq ($(KSRC),)
+@@ -26,7 +28,7 @@
+   endif
+ endif
+ 
+-KVER := $(shell $(CC) $(CFLAGS) -E -dM $(VERSION_FILE) | \
++KVER := $(shell $(CC) $(CFLAGS) $(LDFLAGS) -E -dM $(VERSION_FILE) | \
+ 	grep UTS_RELEASE | awk '{ print $$3 }' | sed 's/\"//g')
+ 
+ KMOD := /lib/modules/$(KVER)/extra
+@@ -38,15 +40,23 @@
+ KREV := $(shell echo $(KVER) | \
+ 	sed -e 's/^[0-9][0-9]*\.[0-9][0-9]*\.\([0-9][0-9]*\).*/\1/')
+ 
+-kver_eq = $(shell [ $(KMAJ)$(KMIN)$(KREV) -eq $(1)$(2)$(3) ] && \
++kver_eq = $(shell [ $(KMAJ) -eq $(1) -a $(KMIN) -eq $(2) -a $(KREV) -eq $(3) ] && \
+ 	echo 1 || echo 0)
+-kver_lt = $(shell [ $(KMAJ)$(KMIN)$(KREV) -lt $(1)$(2)$(3) ] && \
++kver_lt = $(shell [ $(KMAJ) -lt $(1) -o \
++	$(KMAJ) -eq $(1) -a $(KMIN) -lt $(2) -o \
++        $(KMAJ) -eq $(1) -a $(KMIN) -eq $(2) -a $(KREV) -lt $(3) ] && \
+ 	echo 1 || echo 0)
+-kver_le = $(shell [ $(KMAJ)$(KMIN)$(KREV) -le $(1)$(2)$(3) ] && \
++kver_le = $(shell [ $(KMAJ) -lt $(1) -o \
++        $(KMAJ) -eq $(1) -a $(KMIN) -lt $(2) -o \
++        $(KMAJ) -eq $(1) -a $(KMIN) -eq $(2) -a $(KREV) -le $(3) ] && \
+ 	echo 1 || echo 0)
+-kver_gt = $(shell [ $(KMAJ)$(KMIN)$(KREV) -gt $(1)$(2)$(3) ] && \
++kver_gt = $(shell [ ( $(KMAJ) -gt $(1) ) -o \
++        $(KMAJ) -eq $(1) -a $(KMIN) -gt $(2) -o \
++        $(KMAJ) -eq $(1) -a $(KMIN) -eq $(2) -a $(KREV) -gt $(3) ] && \
+ 	echo 1 || echo 0)
+-kver_ge = $(shell [ $(KMAJ)$(KMIN)$(KREV) -ge $(1)$(2)$(3) ] && \
++kver_ge = $(shell [ ( $(KMAJ) -gt $(1) ) -o \
++        $(KMAJ) -eq $(1) -a $(KMIN) -gt $(2) -o \
++        $(KMAJ) -eq $(1) -a $(KMIN) -eq $(2) -a $(KREV) -ge $(3) ] && \
+ 	echo 1 || echo 0)
+ kver_lk = $(shell [ `echo $(KVER) | egrep $(1)` ] && echo 1 || echo 0)
+ 
+@@ -56,6 +66,23 @@
+ # base first the earlier patch sets will not need to be modified.
+ #
+ 
++ifeq ($(call kver_le,3,2,0),1)
++	PATCHES := $(PATCHES) compat-2.6.39-3.2.patch
++endif
++
++ifeq ($(call kver_le,2,6,38),1)
++	PATCHES := $(PATCHES) compat-2.6.38.patch
++endif
++
++ifeq ($(call kver_le,2,6,37),1)
++	PATCHES := $(PATCHES) compat-2.6.36-2.6.37.patch
++endif
++
++# Compatibility patch for kernels > 2.6.32 <= 2.6.35
++ifeq ($(call kver_le,2,6,35),1)
++	PATCHES := $(PATCHES) compat-2.6.33-2.6.35.patch
++endif
++
+ # Compatibility patch for kernels <= 2.6.32
+ ifeq ($(call kver_le,2,6,32),1)
+ 	PATCHES := $(PATCHES) compat-2.6.32.patch
+@@ -210,9 +237,9 @@
+ depmod:
+ 	@echo "Running depmod"
+ 	@if [ x$(DESTDIR) != x -o x$(INSTALL_MOD_PATH) != x ]; then \
+-		depmod -aq -b $(DESTDIR)$(INSTALL_MOD_PATH) $(KVER); \
++		$(DEPMOD) -aq -b $(DESTDIR)$(INSTALL_MOD_PATH) $(KVER); \
+ 	else \
+-		depmod -aq $(KVER); \
++		$(DEPMOD) -aq $(KVER); \
+ 	fi
+ 
+ install-files: install-usr install-etc install-doc install-kernel
+@@ -231,7 +258,7 @@
+ 				-execdir mv \{\} \{\}.orig \;; \
+ 		fi \
+ 	fi
+-	@install -vD kernel/iscsi_trgt.ko \
++	@install -vD -m 644 kernel/iscsi_trgt.ko \
+ 		$(DESTDIR)$(INSTALL_MOD_PATH)$(KMOD)/iscsi/iscsi_trgt.ko
+ 
+ install-usr: usr/ietd usr/ietadm
+@@ -349,4 +376,3 @@
+ 	find . -name \*.rej -exec rm -f \{\} \;
+ 	find . -name \*~ -exec rm -f \{\} \;
+ 	find . -name Module.symvers -exec rm -f \{\} \;
+-
+diff -uraN iscsitarget-1.4.20.2/RELEASE_NOTES iscsitarget-1.4.20.2-r481/RELEASE_NOTES
+--- iscsitarget-1.4.20.2/RELEASE_NOTES	2010-07-15 11:15:46.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/RELEASE_NOTES	2012-04-28 17:30:32.363269366 -0400
+@@ -2,6 +2,31 @@
+                Release Notes for iSCSI Enterprise Target
+                =========================================
+ 
++                            March 18th, 2011
++                            Version 1.4.20.3
++                            ----------------
++
++The IET development team is pleased to announce the release of version
++1.4.20.3 of the iSCSI Enterprise Target.
++
++This release is a bugfix release. The following issues were fixed:
++- multiple compatibility updates to bring kernel support up to 2.6.38
++- fixed iSNS issue that prevented IET from registering
++- fixed re-enabling listening after max connections was exceeded
++- fixed NULL-pointer dereference due to race in UA handling
++- fixed initd scripts to reflect pid file name change
++- fixed crypto API error handling
++- fixed small memory leak in volume args buffer on BSD platforms
++- fixed max_cmd_sn not being set for the session
++- fixed issue where StatSN was being updated when a command was ignored
++- fixed connection accounting in ietd for session reinstatements
++- MaxOutStandingR2T fixed at 1 for 1.4.20 branch due to broken handling
++- fixed ipv6 address handling in SendTargets
++
++               =========================================
++               Release Notes for iSCSI Enterprise Target
++               =========================================
++
+                             July 14th, 2010
+                             Version 1.4.20.2
+                             ----------------
+diff -uraN iscsitarget-1.4.20.2/dkms.conf iscsitarget-1.4.20.2-r481/dkms.conf
+--- iscsitarget-1.4.20.2/dkms.conf	2010-07-15 11:15:46.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/dkms.conf	2012-04-28 17:30:31.791275770 -0400
+@@ -3,7 +3,7 @@
+ #
+ 
+ PACKAGE_NAME="iscsitarget"
+-PACKAGE_VERSION="1.4.20.2"
++PACKAGE_VERSION="trunk"
+ MOD_PATH=${dkms_tree}/${PACKAGE_NAME}/${PACKAGE_VERSION}
+ 
+ BUILT_MODULE_NAME="iscsi_trgt"
+@@ -20,42 +20,48 @@
+ # Patches newest - oldest, distro spec at bottom
+ #
+ 
+-PATCH[0]="compat-2.6.32.patch"
+-PATCH_MATCH[0]="2\.6\.(9|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32)"
++PATCH[0]="compat-2.6.36-2.6.37.patch"
++PATCH_MATCH[0]="2\.6\.(9|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32|33|34|35|36|37)"
+ 
+-PATCH[1]="compat-2.6.31.patch"
+-PATCH_MATCH[1]="2\.6\.(9|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31)"
++PATCH[1]="compat-2.6.33-2.6.35.patch"
++PATCH_MATCH[1]="2\.6\.(9|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32|33|34|35)"
+ 
+-PATCH[2]="compat-2.6.30.patch"
+-PATCH_MATCH[2]="2\.6\.(9|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30)"
++PATCH[2]="compat-2.6.32.patch"
++PATCH_MATCH[2]="2\.6\.(9|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31|32)"
+ 
+-PATCH[3]="compat-2.6.29.patch"
+-PATCH_MATCH[3]="2\.6\.(9|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29)"
++PATCH[3]="compat-2.6.31.patch"
++PATCH_MATCH[3]="2\.6\.(9|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31)"
+ 
+-PATCH[4]="compat-2.6.28.patch"
+-PATCH_MATCH[4]="2\.6\.(9|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28)"
++PATCH[4]="compat-2.6.30.patch"
++PATCH_MATCH[4]="2\.6\.(9|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30)"
+ 
+-PATCH[5]="compat-2.6.25-2.6.27.patch"
+-PATCH_MATCH[5]="2\.6\.(9|14|15|16|17|18|19|20|21|22|23|24|25|26|27)"
++PATCH[5]="compat-2.6.29.patch"
++PATCH_MATCH[5]="2\.6\.(9|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29)"
+ 
+-PATCH[6]="compat-2.6.24.patch"
+-PATCH_MATCH[6]="2\.6\.(9|14|15|16|17|18|19|20|21|22|23|24)"
++PATCH[6]="compat-2.6.28.patch"
++PATCH_MATCH[6]="2\.6\.(9|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28)"
+ 
+-PATCH[7]="compat-2.6.23.patch"
+-PATCH_MATCH[7]="2\.6\.(9|14|15|16|17|18|19|20|21|22|23)"
++PATCH[7]="compat-2.6.25-2.6.27.patch"
++PATCH_MATCH[7]="2\.6\.(9|14|15|16|17|18|19|20|21|22|23|24|25|26|27)"
+ 
+-PATCH[8]="compat-2.6.22.patch"
+-PATCH_MATCH[8]="2\.6\.(9|14|15|16|17|18|19|20|21|22)"
++PATCH[8]="compat-2.6.24.patch"
++PATCH_MATCH[8]="2\.6\.(9|14|15|16|17|18|19|20|21|22|23|24)"
+ 
+-PATCH[9]="compat-2.6.19-2.6.21.patch"
+-PATCH_MATCH[9]="2\.6\.(9|14|15|16|17|18|19|20|21)"
++PATCH[9]="compat-2.6.23.patch"
++PATCH_MATCH[9]="2\.6\.(9|14|15|16|17|18|19|20|21|22|23)"
+ 
+-PATCH[10]="compat-2.6.14-2.6.18.patch"
+-PATCH_MATCH[10]="2\.6\.(9|14|15|16|17|18)"
++PATCH[10]="compat-2.6.22.patch"
++PATCH_MATCH[10]="2\.6\.(9|14|15|16|17|18|19|20|21|22)"
+ 
+-PATCH[11]="compat-sles10sp2.patch"
+-PATCH_MATCH[11]="2\.6\.16\.60-.*"
++PATCH[11]="compat-2.6.19-2.6.21.patch"
++PATCH_MATCH[11]="2\.6\.(9|14|15|16|17|18|19|20|21)"
+ 
+-PATCH[12]="compat-rhel4.patch"
+-PATCH_MATCH[12]="2\.6\.9-.*\.(el|plus\.c4)"
++PATCH[12]="compat-2.6.14-2.6.18.patch"
++PATCH_MATCH[12]="2\.6\.(9|14|15|16|17|18)"
++
++PATCH[13]="compat-sles10sp2.patch"
++PATCH_MATCH[13]="2\.6\.16\.60-.*"
++
++PATCH[14]="compat-rhel4.patch"
++PATCH_MATCH[14]="2\.6\.9-.*\.(el|plus\.c4)"
+ 
+diff -uraN iscsitarget-1.4.20.2/doc/manpages/ietd.conf.5 iscsitarget-1.4.20.2-r481/doc/manpages/ietd.conf.5
+--- iscsitarget-1.4.20.2/doc/manpages/ietd.conf.5	2010-03-01 21:42:53.000000000 -0500
++++ iscsitarget-1.4.20.2-r481/doc/manpages/ietd.conf.5	2012-04-28 17:30:32.365269344 -0400
+@@ -40,7 +40,7 @@
+     MaxBurstLength 262144
+     FirstBurstLength 65536
+     DefaultTime2Wait 2
+-    DefaultTime2Retain 20
++    DefaultTime2Retain 0
+     MaxOutstandingR2T 8
+     NOPInterval 0
+     NOPTimeout 0
+@@ -279,10 +279,10 @@
+ should be set to multiples of PAGE_SIZE. Configuring too large values may lead to problems allocating sufficient memory, which in turn may lead to SCSI commands timing out at the initiator host. The default value is 65536.
+ .TP
+ .B [DefaultTime2Wait <value>]
+-Currently not supported.
++Currently not implemented, but can be used to set how long initiators wait before logging back in after a connection is logged out or dropped.
+ .TP
+ .B [DefaultTime2Retain <value>]
+-Currently not supported.
++Currently we only support 0 which means sessions are not retained after the last connection is logged out or dropped.
+ .TP
+ .B [MaxOutstandingR2T <value>]
+ Optional. Controls the maximum number of data transfers the target may request at once, each of up to
+diff -uraN iscsitarget-1.4.20.2/etc/ietd.conf iscsitarget-1.4.20.2-r481/etc/ietd.conf
+--- iscsitarget-1.4.20.2/etc/ietd.conf	2009-11-10 13:35:24.000000000 -0500
++++ iscsitarget-1.4.20.2-r481/etc/ietd.conf	2012-04-28 17:30:33.402257735 -0400
+@@ -76,10 +76,12 @@
+ 	#MaxXmitDataSegmentLength 8192		# Max data per PDU to transmit
+ 	#MaxBurstLength		262144		# Max data per sequence (R2T)
+ 	#FirstBurstLength	65536		# Max unsolicited data sequence
+-	#DefaultTime2Wait	2		# Secs wait for ini to log out
+-						# Not used
+-	#DefaultTime2Retain	20		# Secs keep cmnds after log out
+-						# Not used
++	#DefaultTime2Wait	2		# Secs to wait for ini to logout
++						# also secs for ini to wait
++						# before logging back in
++						# Not implemented, but settable
++	#DefaultTime2Retain	0		# Secs keep session after logout
++						# We only support 0
+ 	#MaxOutstandingR2T	1		# Max outstanding R2Ts per cmnd
+ 	#DataPDUInOrder		Yes		# Data in PDUs is ordered
+ 						# We only support ordered
+diff -uraN iscsitarget-1.4.20.2/etc/initd/initd iscsitarget-1.4.20.2-r481/etc/initd/initd
+--- iscsitarget-1.4.20.2/etc/initd/initd	2010-06-29 17:57:27.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/etc/initd/initd	2012-04-28 17:30:33.401257746 -0400
+@@ -1,4 +1,4 @@
+-#!/bin/bash
++#!/bin/sh
+ #
+ # Start the iSCSI Enterprise Target.
+ #
+diff -uraN iscsitarget-1.4.20.2/etc/initd/initd.debian iscsitarget-1.4.20.2-r481/etc/initd/initd.debian
+--- iscsitarget-1.4.20.2/etc/initd/initd.debian	2010-06-29 17:57:27.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/etc/initd/initd.debian	2012-04-28 17:30:33.401257746 -0400
+@@ -7,7 +7,7 @@
+ PATH=/sbin:/bin:/usr/sbin:/usr/bin
+ DAEMON=/usr/sbin/ietd
+ OPTIONS=""
+-PIDFILE=/var/run/iscsi_trgt.pid
++PIDFILE=/var/run/ietd.pid
+ 
+ if [ -f /lib/init/vars.sh ]; then
+ 	. /lib/init/vars.sh
+diff -uraN iscsitarget-1.4.20.2/etc/initd/initd.gentoo iscsitarget-1.4.20.2-r481/etc/initd/initd.gentoo
+--- iscsitarget-1.4.20.2/etc/initd/initd.gentoo	2010-06-29 17:57:27.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/etc/initd/initd.gentoo	2012-04-28 17:30:33.400257757 -0400
+@@ -17,7 +17,7 @@
+ 	ebegin "Starting iSCSI Target"
+ 	modprobe -q crc32c
+ 	modprobe iscsi_trgt
+-	start-stop-daemon --start --exec /usr/sbin/ietd --pidfile /var/run/iscsi_trgt.pid -- $OPTIONS
++	start-stop-daemon --start --exec /usr/sbin/ietd --pidfile /var/run/ietd.pid -- $OPTIONS
+ 	eend $?
+ }
+ 
+@@ -25,7 +25,7 @@
+ {
+ 	ebegin "Stopping iSCSI Target"
+ 	ietadm --op delete
+-	start-stop-daemon --stop --exec /usr/sbin/ietd --pidfile /var/run/iscsi_trgt.pid
++	start-stop-daemon --stop --exec /usr/sbin/ietd --pidfile /var/run/ietd.pid
+ 	rm -f /var/run/iscsi_trgt.pid
+ 	eend $?
+ }
+diff -uraN iscsitarget-1.4.20.2/include/iet_u.h iscsitarget-1.4.20.2-r481/include/iet_u.h
+--- iscsitarget-1.4.20.2/include/iet_u.h	2010-07-15 11:15:46.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/include/iet_u.h	2012-04-28 17:30:31.791275770 -0400
+@@ -1,7 +1,7 @@
+ #ifndef _IET_U_H
+ #define _IET_U_H
+ 
+-#define IET_VERSION_STRING	"1.4.20.2"
++#define IET_VERSION_STRING	"trunk"
+ 
+ /* The maximum length of 223 bytes in the RFC. */
+ #define ISCSI_NAME_LEN	256
+diff -uraN iscsitarget-1.4.20.2/iscsitarget.spec iscsitarget-1.4.20.2-r481/iscsitarget.spec
+--- iscsitarget-1.4.20.2/iscsitarget.spec	2010-07-15 11:15:46.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/iscsitarget.spec	2012-04-28 17:30:33.399257768 -0400
+@@ -3,7 +3,7 @@
+ ##
+ 
+ ## IET Release
+-%define iet_version 1.4.20.2
++%define iet_version trunk
+ 
+ ## Package Revision
+ %define revision 1
+@@ -113,7 +113,7 @@
+ 
+ ## Build Requirements
+ BuildRequires: kernel >= 2.6
+-BuildRequires: gcc, make, patch, binutils, /usr/bin/install, openssl-devel
++BuildRequires: gcc, make, patch, binutils, /usr/bin/install
+ %if %is_suse
+ BuildRequires: kernel-source = %{kver}
+ %else
+@@ -408,6 +408,9 @@
+ 
+ 
+ %changelog
++* Mon Jan 10 2011 Ross Walker <rswwalker at gmail dot com> - 1.4.20.3
++- removed stray RPM build dependency on openssl
++
+ * Tue May 11 2010 Ross Walker <rswwalker at gmail dot com> - 1.4.20.2
+ - fixed recursive KERNELSRC define problem on SLES
+ - updated SVN building to handle tagged builds
+diff -uraN iscsitarget-1.4.20.2/kernel/Makefile iscsitarget-1.4.20.2-r481/kernel/Makefile
+--- iscsitarget-1.4.20.2/kernel/Makefile	2009-09-04 11:27:48.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/kernel/Makefile	2012-04-28 17:30:31.789275792 -0400
+@@ -13,5 +13,5 @@
+ iscsi_trgt-objs	:= tio.o iscsi.o nthread.o wthread.o config.o digest.o \
+ 			conn.o session.o target.o volume.o iotype.o \
+ 			file-io.o null-io.o target_disk.o event.o param.o \
+-			block-io.o ua.o
++			block-io.o ua.o persist.o
+ 
+diff -uraN iscsitarget-1.4.20.2/kernel/block-io.c iscsitarget-1.4.20.2-r481/kernel/block-io.c
+--- iscsitarget-1.4.20.2/kernel/block-io.c	2010-06-29 18:02:26.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/kernel/block-io.c	2012-04-28 17:30:31.784275847 -0400
+@@ -56,15 +56,15 @@
+ 	struct request_queue *bdev_q = bdev_get_queue(bio_data->bdev);
+ 	struct tio_work *tio_work;
+ 	struct bio *tio_bio = NULL, *bio = NULL, *biotail = NULL;
++	struct blk_plug plug;
+ 
+-	u32 offset = tio->offset;
+ 	u32 size = tio->size;
+ 	u32 tio_index = 0;
+ 
+ 	int max_pages = 1;
+ 	int err = 0;
+ 
+-	loff_t ppos = ((loff_t) tio->idx << PAGE_SHIFT) + offset;
++	loff_t ppos = tio->offset;
+ 
+ 	/* Calculate max_pages for bio_alloc (memory saver) */
+ 	if (bdev_q)
+@@ -101,23 +101,23 @@
+ 
+ 		/* Loop for filling bio */
+ 		while (tio_index < tio->pg_cnt) {
+-			unsigned int bytes = PAGE_SIZE - offset;
++			unsigned int bytes = PAGE_SIZE;
+ 
+ 			if (bytes > size)
+ 				bytes = size;
+ 
+-			if (!bio_add_page(bio, tio->pvec[tio_index], bytes, offset))
++			if (!bio_add_page(bio, tio->pvec[tio_index], bytes, 0))
+ 				break;
+ 
+ 			size -= bytes;
+ 			ppos += bytes;
+ 
+-			offset = 0;
+-
+ 			tio_index++;
+ 		}
+ 	}
+ 
++	blk_start_plug(&plug);
++
+ 	/* Walk the list, submitting bios 1 by 1 */
+ 	while (tio_bio) {
+ 		bio = tio_bio;
+@@ -127,8 +127,7 @@
+ 		submit_bio(rw, bio);
+ 	}
+ 
+-	if (bdev_q && bdev_q->unplug_fn)
+-		bdev_q->unplug_fn(bdev_q);
++	blk_finish_plug(&plug);
+ 
+ 	wait_for_completion(&tio_work->tio_complete);
+ 
+@@ -155,14 +154,14 @@
+ {
+ 	struct blockio_data *bio_data = volume->private;
+ 	struct block_device *bdev;
+-	int flags = FMODE_READ | (LUReadonly(volume) ? 0 : FMODE_WRITE);
++	int flags = FMODE_EXCL | FMODE_READ | (LUReadonly(volume) ? 0 : FMODE_WRITE);
+ 	int err = 0;
+ 
+ 	bio_data->path = kstrdup(path, GFP_KERNEL);
+ 	if (!bio_data->path)
+ 		return -ENOMEM;
+ 
+-	bdev = open_bdev_exclusive(path, flags, THIS_MODULE);
++	bdev = blkdev_get_by_path(path, flags, THIS_MODULE);
+ 	if (IS_ERR(bdev)) {
+ 		err = PTR_ERR(bdev);
+ 		eprintk("Can't open device %s, error %d\n", path, err);
+@@ -250,10 +249,10 @@
+ blockio_detach(struct iet_volume *volume)
+ {
+ 	struct blockio_data *bio_data = volume->private;
+-	int flags = FMODE_READ | (LUReadonly(volume) ? 0 : FMODE_WRITE);
++	int flags = FMODE_EXCL | FMODE_READ | (LUReadonly(volume) ? 0 : FMODE_WRITE);
+ 
+ 	if (bio_data->bdev)
+-		close_bdev_exclusive(bio_data->bdev, flags);
++		blkdev_put(bio_data->bdev, flags);
+ 	kfree(bio_data->path);
+ 
+ 	kfree(volume->private);
+diff -uraN iscsitarget-1.4.20.2/kernel/config.c iscsitarget-1.4.20.2-r481/kernel/config.c
+--- iscsitarget-1.4.20.2/kernel/config.c	2010-03-30 14:08:19.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/kernel/config.c	2012-04-28 17:30:31.784275847 -0400
+@@ -9,7 +9,7 @@
+ #include "iscsi.h"
+ #include "iscsi_dbg.h"
+ 
+-static DECLARE_MUTEX(ioctl_sem);
++static DEFINE_MUTEX(ioctl_mutex);
+ 
+ struct proc_entries {
+ 	const char *name;
+@@ -258,7 +258,7 @@
+ 	long err;
+ 	u32 id;
+ 
+-	err = down_interruptible(&ioctl_sem);
++	err = mutex_lock_interruptible(&ioctl_mutex);
+ 	if (err < 0)
+ 		return err;
+ 
+@@ -339,7 +339,7 @@
+ 
+ 	target_unlock(target);
+ done:
+-	up(&ioctl_sem);
++	mutex_unlock(&ioctl_mutex);
+ 
+ 	return err;
+ }
+@@ -347,9 +347,9 @@
+ static int release(struct inode *i __attribute__((unused)),
+ 		   struct file *f __attribute__((unused)))
+ {
+-	down(&ioctl_sem);
++	mutex_lock(&ioctl_mutex);
+ 	target_del_all();
+-	up(&ioctl_sem);
++	mutex_unlock(&ioctl_mutex);
+ 
+ 	return 0;
+ }
+diff -uraN iscsitarget-1.4.20.2/kernel/conn.c iscsitarget-1.4.20.2-r481/kernel/conn.c
+--- iscsitarget-1.4.20.2/kernel/conn.c	2010-04-11 11:13:42.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/kernel/conn.c	2012-04-28 17:30:31.789275792 -0400
+@@ -44,7 +44,7 @@
+ 		switch (sk->sk_family) {
+ 		case AF_INET:
+ 			snprintf(buf, sizeof(buf),
+-				 "%u.%u.%u.%u", NIPQUAD(inet_sk(sk)->inet_daddr));
++				 "%pI4", &inet_sk(sk)->inet_daddr);
+ 			break;
+ 		case AF_INET6:
+ 			snprintf(buf, sizeof(buf), "[%pI6]",
+@@ -241,8 +241,6 @@
+ 		conn_close(conn);
+ 
+ 	err = iet_conn_alloc(session, info);
+-	if (!err && conn)
+-		err = -EEXIST;
+ 
+ 	return err;
+ }
+diff -uraN iscsitarget-1.4.20.2/kernel/digest.c iscsitarget-1.4.20.2-r481/kernel/digest.c
+--- iscsitarget-1.4.20.2/kernel/digest.c	2008-06-26 11:11:53.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/kernel/digest.c	2012-04-28 17:30:31.786275825 -0400
+@@ -200,29 +200,22 @@
+ {
+ 	struct scatterlist *sg = cmnd->conn->hash_sg;
+ 	u32 size, length;
+-	int i, idx, count;
++	int i, idx;
+ 	unsigned int nbytes;
+ 
+ 	size = cmnd->pdu.datasize;
+ 	nbytes = size = (size + 3) & ~3;
+ 
+-	offset += tio->offset;
+ 	idx = offset >> PAGE_CACHE_SHIFT;
+ 	offset &= ~PAGE_CACHE_MASK;
+-	count = get_pgcnt(size, offset);
+-	assert(idx + count <= tio->pg_cnt);
+ 
+-	assert(count <= ISCSI_CONN_IOV_MAX);
++	assert(idx <= ISCSI_CONN_IOV_MAX);
+ 
+ 	sg_init_table(sg, ARRAY_SIZE(cmnd->conn->hash_sg));
+ 	crypto_hash_init(hash);
+ 
+-	for (i = 0; size; i++) {
+-		if (offset + size > PAGE_CACHE_SIZE)
+-			length = PAGE_CACHE_SIZE - offset;
+-		else
+-			length = size;
+-
++	for (i = 0; size > 0; i++) {
++		length = min_t(u32, PAGE_CACHE_SIZE - offset, size);
+ 		sg_set_page(&sg[i], tio->pvec[idx + i], length, offset);
+ 		size -= length;
+ 		offset = 0;
+diff -uraN iscsitarget-1.4.20.2/kernel/event.c iscsitarget-1.4.20.2-r481/kernel/event.c
+--- iscsitarget-1.4.20.2/kernel/event.c	2009-01-24 08:35:56.000000000 -0500
++++ iscsitarget-1.4.20.2-r481/kernel/event.c	2012-04-28 17:30:31.787275814 -0400
+@@ -6,6 +6,7 @@
+  * Some functions are based on audit code.
+  */
+ 
++#include <linux/module.h>
+ #include <net/tcp.h>
+ #include "iet_u.h"
+ #include "iscsi_dbg.h"
+@@ -13,24 +14,8 @@
+ static struct sock *nl;
+ static u32 ietd_pid;
+ 
+-static int event_recv_msg(struct sk_buff *skb, struct nlmsghdr *nlh)
+-{
+-	u32 uid, pid, seq;
+-	char *data;
+-
+-	pid  = NETLINK_CREDS(skb)->pid;
+-	uid  = NETLINK_CREDS(skb)->uid;
+-	seq  = nlh->nlmsg_seq;
+-	data = NLMSG_DATA(nlh);
+-
+-	ietd_pid = pid;
+-
+-	return 0;
+-}
+-
+ static void event_recv_skb(struct sk_buff *skb)
+ {
+-	int err;
+ 	struct nlmsghdr	*nlh;
+ 	u32 rlen;
+ 
+@@ -41,9 +26,9 @@
+ 		rlen = NLMSG_ALIGN(nlh->nlmsg_len);
+ 		if (rlen > skb->len)
+ 			rlen = skb->len;
+-		if ((err = event_recv_msg(skb, nlh))) {
+-			netlink_ack(skb, nlh, -err);
+-		} else if (nlh->nlmsg_flags & NLM_F_ACK)
++		ietd_pid = NETLINK_CB(skb).pid;
++		WARN_ON(ietd_pid == 0);
++		if (nlh->nlmsg_flags & NLM_F_ACK)
+ 			netlink_ack(skb, nlh, 0);
+ 		skb_pull(skb, rlen);
+ 	}
+@@ -58,6 +43,7 @@
+ 	if (!(skb = alloc_skb(NLMSG_SPACE(len), gfp_mask)))
+ 		return -ENOMEM;
+ 
++	WARN_ON(ietd_pid == 0);
+ 	nlh = __nlmsg_put(skb, ietd_pid, seq++, NLMSG_DONE, len - sizeof(*nlh), 0);
+ 
+ 	memcpy(NLMSG_DATA(nlh), data, len);
+diff -uraN iscsitarget-1.4.20.2/kernel/file-io.c iscsitarget-1.4.20.2-r481/kernel/file-io.c
+--- iscsitarget-1.4.20.2/kernel/file-io.c	2010-06-29 18:02:26.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/kernel/file-io.c	2012-04-28 17:30:31.787275814 -0400
+@@ -24,30 +24,21 @@
+ 	struct file *filp;
+ 	mm_segment_t oldfs;
+ 	struct page *page;
+-	u32 offset, size;
+-	loff_t ppos, count;
++	loff_t ppos;
+ 	char *buf;
+ 	int i, err = 0;
+-	ssize_t ret;
++	u32 count, size, ret;
+ 
+ 	assert(p);
+ 	filp = p->filp;
+ 	size = tio->size;
+-	offset= tio->offset;
+-
+-	ppos = (loff_t) tio->idx << PAGE_CACHE_SHIFT;
+-	ppos += offset;
++	ppos = tio->offset;
+ 
+ 	for (i = 0; i < tio->pg_cnt; i++) {
+ 		page = tio->pvec[i];
+ 		assert(page);
+ 		buf = page_address(page);
+-		buf += offset;
+-
+-		if (offset + size > PAGE_CACHE_SIZE)
+-			count = PAGE_CACHE_SIZE - offset;
+-		else
+-			count = size;
++		count = min_t(u32, PAGE_CACHE_SIZE, size);
+ 
+ 		oldfs = get_fs();
+ 		set_fs(get_ds());
+@@ -60,14 +51,17 @@
+ 		set_fs(oldfs);
+ 
+ 		if (ret != count) {
+-			eprintk("I/O error %lld, %ld\n", count, (long) ret);
++			eprintk("I/O error %u, %ld\n", count, (long) ret);
+ 			err = -EIO;
++			break;
+ 		}
+ 
+ 		size -= count;
+-		offset = 0;
+ 	}
+-	assert(!size);
++
++	if (!err) {
++		assert(!size);
++	}
+ 
+ 	return err;
+ }
+@@ -81,8 +75,7 @@
+ 	int res;
+ 
+ 	if (tio) {
+-		ppos = (loff_t) tio->idx << PAGE_CACHE_SHIFT;
+-		ppos += tio->offset;
++		ppos = tio->offset;
+ 		count = tio->size;
+ 	} else {
+ 		ppos = 0;
+diff -uraN iscsitarget-1.4.20.2/kernel/iotype.c iscsitarget-1.4.20.2-r481/kernel/iotype.c
+--- iscsitarget-1.4.20.2/kernel/iotype.c	2007-08-20 03:23:42.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/kernel/iotype.c	2012-04-28 17:30:31.785275836 -0400
+@@ -9,7 +9,7 @@
+ #include "iscsi_dbg.h"
+ 
+ static LIST_HEAD(iotypes);
+-static rwlock_t iotypes_lock = RW_LOCK_UNLOCKED;
++static DEFINE_RWLOCK(iotypes_lock);
+ 
+ static struct iotype *find_iotype(const char *name)
+ {
+diff -uraN iscsitarget-1.4.20.2/kernel/iscsi.c iscsitarget-1.4.20.2-r481/kernel/iscsi.c
+--- iscsitarget-1.4.20.2/kernel/iscsi.c	2010-04-11 11:53:37.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/kernel/iscsi.c	2012-04-28 17:30:31.785275836 -0400
+@@ -224,12 +224,12 @@
+ 	LIST_HEAD(head);
+ 
+ 	if (!list_empty(&cmnd->list)) {
+-		eprintk("%x %x %x %x %lx %u %u %u %u %u %u %u %d %d\n",
++		eprintk("%x %x %x %x %lx %u %u %u %u %u %u %u %u %d %d\n",
+ 			cmnd_itt(cmnd), cmnd_ttt(cmnd), cmnd_opcode(cmnd),
+ 			cmnd_scsicode(cmnd), cmnd->flags, cmnd->r2t_sn,
+-			cmnd->r2t_length, cmnd->is_unsolicited_data,
+-			cmnd->target_task_tag, cmnd->outstanding_r2t,
+-			cmnd->hdigest, cmnd->ddigest,
++			cmnd->r2t_length, cmnd->exp_offset,
++			cmnd->is_unsolicited_data, cmnd->target_task_tag,
++			cmnd->outstanding_r2t, cmnd->hdigest, cmnd->ddigest,
+ 			list_empty(&cmnd->pdu_list), list_empty(&cmnd->hash_list));
+ 
+ 		assert(list_empty(&cmnd->list));
+@@ -249,6 +249,9 @@
+ 	LIST_HEAD(send);
+ 
+ 	dprintk(D_GENERIC, "%p\n", cmnd);
++
++	BUG_ON(!cmnd->tio);
++
+ 	pdusize = conn->session->param.max_xmit_data_length;
+ 	expsize = cmnd_read_size(cmnd);
+ 	size = min(expsize, tio->size);
+@@ -328,8 +331,7 @@
+ 		rsp->pdu.datasize = sizeof(struct iscsi_sense_data) +
+ 			IET_SENSE_BUF_SIZE;
+ 
+-		rsp->tio->size = (rsp->pdu.datasize + 3) & -4;
+-		rsp->tio->offset = 0;
++		tio_set(rsp->tio, (rsp->pdu.datasize + 3) & -4, 0);
+ 	}
+ 
+ 	return rsp;
+@@ -383,14 +385,24 @@
+ 
+ void send_data_rsp(struct iscsi_cmnd *req, void (*func)(struct iscsi_cmnd *))
+ {
+-	struct iscsi_cmnd *rsp;
+-
+ 	func(req);
+ 
+-	if (req->status == SAM_STAT_GOOD)
++	if (req->status == SAM_STAT_GOOD && req->tio && req->tio->size)
+ 		do_send_data_rsp(req);
+ 	else {
+-		rsp = create_scsi_rsp(req);
++		struct iscsi_cmnd *rsp = create_scsi_rsp(req);
++		struct iscsi_scsi_rsp_hdr *rsp_hdr =
++			(struct iscsi_scsi_rsp_hdr *) &rsp->pdu.bhs;
++		const u32 exp_size = cmnd_read_size(req);
++		const u32 size = req->tio ? req->tio->size : 0;
++
++		if (exp_size > size) {
++			rsp_hdr->flags |= ISCSI_FLG_RESIDUAL_UNDERFLOW;
++			rsp_hdr->residual_count = cpu_to_be32(exp_size - size);
++		} else if (exp_size < size) {
++			rsp_hdr->flags |= ISCSI_FLG_RESIDUAL_OVERFLOW;
++			rsp_hdr->residual_count = cpu_to_be32(size - exp_size);
++		}
+ 		iscsi_cmnd_init_write(rsp);
+ 	}
+ }
+@@ -510,10 +522,13 @@
+ 	struct iscsi_conn *conn = cmnd->conn;
+ 	struct iscsi_session *sess = conn->session;
+ 
++	sess->max_cmd_sn = sess->exp_cmd_sn + sess->max_queued_cmnds;
++
+ 	if (set_stat_sn)
+ 		cmnd->pdu.bhs.sn = cpu_to_be32(conn->stat_sn++);
++
+ 	cmnd->pdu.bhs.exp_sn = cpu_to_be32(sess->exp_cmd_sn);
+-	cmnd->pdu.bhs.max_sn = cpu_to_be32(sess->exp_cmd_sn + sess->max_queued_cmnds);
++	cmnd->pdu.bhs.max_sn = cpu_to_be32(sess->max_cmd_sn);
+ }
+ 
+ static void update_stat_sn(struct iscsi_cmnd *cmnd)
+@@ -619,8 +634,9 @@
+ 
+ 	err = cmnd_insert_hash_ttt(cmnd, ISCSI_RESERVED_TAG);
+ 	if (!err) {
+-		update_stat_sn(cmnd);
+ 		err = check_cmd_sn(cmnd);
++		if (!err)
++			update_stat_sn(cmnd);
+ 	} else if (!cmnd_immediate(cmnd))
+ 		set_cmnd_tmfabort(cmnd);
+ 
+@@ -689,15 +705,15 @@
+ 	char *addr;
+ 
+ 	dprintk(D_GENERIC, "%p %u,%u\n", tio, offset, size);
+-	offset += tio->offset;
+ 
+-	if (!(offset < tio->offset + tio->size) ||
+-	    !(offset + size <= tio->offset + tio->size)) {
+-		eprintk("%u %u %u %u", offset, size, tio->offset, tio->size);
++	if (!size)
++		return 0;
++
++	if (!(offset + size <= tio->pg_cnt * PAGE_CACHE_SIZE)) {
++		eprintk("bad offset: o:%u s:%u total:%lu",
++			offset, size, tio->pg_cnt * PAGE_CACHE_SIZE);
+ 		return -EIO;
+ 	}
+-	assert(offset < tio->offset + tio->size);
+-	assert(offset + size <= tio->offset + tio->size);
+ 
+ 	idx = offset >> PAGE_CACHE_SHIFT;
+ 	offset &= ~PAGE_CACHE_MASK;
+@@ -733,7 +749,10 @@
+ 	return 0;
+ }
+ 
+-static void set_offset_and_length(struct iet_volume *lu, u8 *cmd, loff_t *off, u32 *len)
++static void set_offset_and_length(const struct iet_volume *lu,
++				  const u8 *cmd,
++				  loff_t *off,
++				  u32 *len)
+ {
+ 	assert(lu);
+ 
+@@ -754,6 +773,7 @@
+ 		break;
+ 	case READ_16:
+ 	case WRITE_16:
++	case WRITE_SAME_16:
+ 		*off = (u64)cmd[2] << 56 | (u64)cmd[3] << 48 |
+ 			(u64)cmd[4] << 40 | (u64)cmd[5] << 32 |
+ 			(u64)cmd[6] << 24 | (u64)cmd[7] << 16 |
+@@ -761,6 +781,14 @@
+ 		*len = (u32)cmd[10] << 24 | (u32)cmd[11] << 16 |
+ 			(u32)cmd[12] << 8 | (u32)cmd[13];
+ 		break;
++	case PERSISTENT_RESERVE_OUT:
++		{
++			const struct persistent_reserve_out *pr_out =
++				(const struct persistent_reserve_out *)cmd;
++			*off = 0;
++			*len = be32_to_cpu(pr_out->parameter_list_length);
++			return;
++		}
+ 	default:
+ 		BUG();
+ 	}
+@@ -769,7 +797,7 @@
+ 	*len <<= lu->blk_shift;
+ }
+ 
+-static u32 translate_lun(u16 * data)
++u32 translate_lun(u16 *data)
+ {
+ 	u8 *p = (u8 *) data;
+ 	u32 lun = ~0U;
+@@ -793,16 +821,19 @@
+ 
+ static void send_r2t(struct iscsi_cmnd *req)
+ {
++	struct iscsi_sess_param *param = &req->conn->session->param;
+ 	struct iscsi_cmnd *rsp;
+ 	struct iscsi_r2t_hdr *rsp_hdr;
+-	u32 length, offset, burst;
++	u32 offset, burst;
+ 	LIST_HEAD(send);
+ 
+-	length = req->r2t_length;
+-	burst = req->conn->session->param.max_burst_length;
+-	offset = be32_to_cpu(cmnd_hdr(req)->data_length) - length;
++	if (req->outstanding_r2t >= param->max_outstanding_r2t)
++		return;
++
++	burst = param->max_burst_length;
++	offset = cmnd_write_size(req) - req->r2t_length;
+ 
+-	do {
++	while (req->r2t_length) {
+ 		rsp = iscsi_cmnd_create_rsp_cmnd(req, 0);
+ 		rsp->pdu.bhs.ttt = req->target_task_tag;
+ 
+@@ -813,13 +844,13 @@
+ 		rsp_hdr->itt = cmnd_hdr(req)->itt;
+ 		rsp_hdr->r2t_sn = cpu_to_be32(req->r2t_sn++);
+ 		rsp_hdr->buffer_offset = cpu_to_be32(offset);
+-		if (length > burst) {
++		if (req->r2t_length > burst) {
+ 			rsp_hdr->data_length = cpu_to_be32(burst);
+-			length -= burst;
++			req->r2t_length -= burst;
+ 			offset += burst;
+ 		} else {
+-			rsp_hdr->data_length = cpu_to_be32(length);
+-			length = 0;
++			rsp_hdr->data_length = cpu_to_be32(req->r2t_length);
++			req->r2t_length = 0;
+ 		}
+ 
+ 		dprintk(D_WRITE, "%x %u %u %u %u\n", cmnd_itt(req),
+@@ -829,17 +860,17 @@
+ 
+ 		list_add_tail(&rsp->list, &send);
+ 
+-		if (++req->outstanding_r2t >= req->conn->session->param.max_outstanding_r2t)
++		if (++req->outstanding_r2t >= param->max_outstanding_r2t)
+ 			break;
++	}
+ 
+-	} while (length);
+-
+-	iscsi_cmnds_init_write(&send);
++	if (!list_empty(&send))
++		iscsi_cmnds_init_write(&send);
+ }
+ 
+ static void scsi_cmnd_exec(struct iscsi_cmnd *cmnd)
+ {
+-	assert(!cmnd->r2t_length);
++	assert(!(cmnd->r2t_length || cmnd->outstanding_r2t));
+ 
+ 	if (cmnd->lun) {
+ 		iscsi_scsi_queuecmnd(cmnd);
+@@ -876,10 +907,10 @@
+ 	if (cmnd_itt(cmnd) == cpu_to_be32(ISCSI_RESERVED_TAG)) {
+ 		if (!cmnd_immediate(cmnd))
+ 			eprintk("%s\n", "initiator bug!");
+-		update_stat_sn(cmnd);
+ 		err = check_cmd_sn(cmnd);
+ 		if (err)
+ 			goto out;
++		update_stat_sn(cmnd);
+ 	} else if ((err = cmnd_insert_hash(cmnd)) < 0) {
+ 		eprintk("ignore this request %x\n", cmnd_itt(cmnd));
+ 		goto out;
+@@ -890,7 +921,7 @@
+ 		conn->read_msg.msg_iov = conn->read_iov;
+ 		if (cmnd->pdu.bhs.itt != cpu_to_be32(ISCSI_RESERVED_TAG)) {
+ 			struct tio *tio;
+-			int pg_cnt = get_pgcnt(size, 0);
++			int pg_cnt = get_pgcnt(size);
+ 
+ 			assert(pg_cnt < ISCSI_CONN_IOV_MAX);
+ 			cmnd->tio = tio = tio_alloc(pg_cnt);
+@@ -970,6 +1001,7 @@
+ 	case REQUEST_SENSE:
+ 	case RESERVE:
+ 	case RELEASE:
++	case PERSISTENT_RESERVE_IN:
+ 	{
+ 		if (!(req_hdr->flags & ISCSI_CMD_FINAL) || req->pdu.datasize) {
+ 			/* unexpected unsolicited data */
+@@ -995,24 +1027,29 @@
+ 		}
+ 
+ 		set_offset_and_length(req->lun, req_hdr->scb, &offset, &length);
+-		req->tio = tio_alloc(get_pgcnt(length, offset));
++		req->tio = tio_alloc(get_pgcnt(length));
+ 		tio_set(req->tio, length, offset);
+ 		break;
+ 	}
++	case PERSISTENT_RESERVE_OUT:
+ 	case WRITE_6:
+ 	case WRITE_10:
+ 	case WRITE_16:
+ 	case WRITE_VERIFY:
++	case WRITE_SAME_16:
+ 	{
+ 		struct iscsi_sess_param *param = &conn->session->param;
+ 		loff_t offset;
+ 		u32 length;
+ 
+-		req->r2t_length = be32_to_cpu(req_hdr->data_length) - req->pdu.datasize;
++		req->exp_offset = req->pdu.datasize;
++		req->r2t_length = cmnd_write_size(req) - req->pdu.datasize;
+ 		req->is_unsolicited_data = !(req_hdr->flags & ISCSI_CMD_FINAL);
+ 		req->target_task_tag = get_next_ttt(conn->session);
+ 
+-		if (LUReadonly(req->lun)) {
++		/* the readonly check needs to go */
++		if (req_hdr->scb[0] != PERSISTENT_RESERVE_OUT &&
++		    LUReadonly(req->lun)) {
+ 			create_sense_rsp(req, DATA_PROTECT, 0x27, 0x0);
+ 			cmnd_skip_data(req);
+ 			break;
+@@ -1028,11 +1065,38 @@
+ 			eprintk("Verification is ignored %x\n", cmnd_itt(req));
+ 
+ 		set_offset_and_length(req->lun, req_hdr->scb, &offset, &length);
+-		if (cmnd_write_size(req) != length)
+-			eprintk("%x %u %u\n", cmnd_itt(req), cmnd_write_size(req), length);
+ 
+-		req->tio = tio_alloc(get_pgcnt(length, offset));
+-		tio_set(req->tio, length, offset);
++		if (req_hdr->scb[0] == WRITE_SAME_16) {
++			dprintk(D_VAAI, "WRITE_SAME_16: D: %u L:%u O:%llu\n",
++				cmnd_write_size(req), length, offset);
++
++			if (unlikely(cmnd_write_size(req) > PAGE_CACHE_SIZE)) {
++				eprintk("WRITE_SAME data is bigger than page size"
++					", this is unsupported: D:%u P:%lu\n",
++					cmnd_write_size(req), PAGE_CACHE_SIZE);
++				goto error;
++			}
++
++			if (unlikely(length % cmnd_write_size(req) != 0)) {
++				eprintk("WRITE_SAME data size error: L:%u D:%u\n",
++					length, cmnd_write_size(req));
++				goto error;
++			}
++
++			if (unlikely((req_hdr->scb[1] & 0x06) != 0))
++				eprintk("WRITE_SAME LB/PBDATA ignored: %x\n",
++					req_hdr->scb[1]);
++
++			req->tio = tio_alloc(1);
++			tio_set(req->tio, length, offset);
++		} else {
++			if (unlikely(cmnd_write_size(req) != length))
++				eprintk("%x %u %u\n",
++					cmnd_itt(req), cmnd_write_size(req),
++					length);
++			req->tio = tio_alloc(get_pgcnt(length));
++			tio_set(req->tio, length, offset);
++		}
+ 
+ 		if (req->pdu.datasize) {
+ 			if (cmnd_recv_pdu(conn, req->tio, 0, req->pdu.datasize) < 0)
+@@ -1054,6 +1118,7 @@
+ 
+ static void data_out_start(struct iscsi_conn *conn, struct iscsi_cmnd *cmnd)
+ {
++	struct iscsi_sess_param *param = &conn->session->param;
+ 	struct iscsi_data_out_hdr *req = (struct iscsi_data_out_hdr *)&cmnd->pdu.bhs;
+ 	struct iscsi_cmnd *scsi_cmnd = NULL;
+ 	u32 offset = be32_to_cpu(req->buffer_offset);
+@@ -1067,24 +1132,28 @@
+ 		goto skip_data;
+ 	}
+ 
+-	if (scsi_cmnd->r2t_length < cmnd->pdu.datasize) {
+-		eprintk("invalid data len %x %u %u\n",
+-			cmnd_itt(scsi_cmnd), cmnd->pdu.datasize, scsi_cmnd->r2t_length);
++	if (param->data_pdu_inorder && offset != scsi_cmnd->exp_offset) {
++		eprintk("invalid data offset %x %u %u\n",
++			cmnd_itt(scsi_cmnd), offset, cmnd->exp_offset);
+ 		goto skip_data;
+ 	}
+ 
+-	if (scsi_cmnd->r2t_length + offset != cmnd_write_size(scsi_cmnd)) {
+-		eprintk("%x %u %u %u\n", cmnd_itt(scsi_cmnd), scsi_cmnd->r2t_length,
+-			offset,	cmnd_write_size(scsi_cmnd));
++	if (offset + cmnd->pdu.datasize > cmnd_write_size(scsi_cmnd)) {
++		eprintk("invalid data length %x %u %u\n",
++			cmnd_itt(scsi_cmnd),(offset + cmnd->pdu.datasize),
++			cmnd_write_size(scsi_cmnd));
+ 		goto skip_data;
+ 	}
+ 
+-	scsi_cmnd->r2t_length -= cmnd->pdu.datasize;
+-
+-	if (req->ttt == cpu_to_be32(ISCSI_RESERVED_TAG)) {
+-		/* unsolicited burst data */
+-		if (scsi_cmnd->pdu.bhs.flags & ISCSI_FLG_FINAL) {
+-			eprintk("unexpected data from %x %x\n",
++	if (scsi_cmnd->is_unsolicited_data) {
++		if (offset + cmnd->pdu.datasize > param->first_burst_length) {
++			eprintk("unsolicited data > first burst length %x %x\n",
++				cmnd_itt(cmnd), cmnd_ttt(cmnd));
++			goto skip_data;
++		}
++	} else {
++		if (req->ttt == cpu_to_be32(ISCSI_RESERVED_TAG)) {
++			eprintk("unexpected unsolicited data %x %x\n",
+ 				cmnd_itt(cmnd), cmnd_ttt(cmnd));
+ 			goto skip_data;
+ 		}
+@@ -1095,6 +1164,12 @@
+ 
+ 	if (cmnd_recv_pdu(conn, scsi_cmnd->tio, offset, cmnd->pdu.datasize) < 0)
+ 		goto skip_data;
++
++	if (scsi_cmnd->is_unsolicited_data)
++		scsi_cmnd->r2t_length -= cmnd->pdu.datasize;
++
++	scsi_cmnd->exp_offset += cmnd->pdu.datasize;
++
+ 	return;
+ 
+ skip_data:
+@@ -1116,7 +1191,8 @@
+ 	assert(scsi_cmnd);
+ 
+ 	if (conn->read_overflow) {
+-		eprintk("%x %u\n", cmnd_itt(cmnd), conn->read_overflow);
++		eprintk("connection read overflow %x %u\n",
++			cmnd_itt(cmnd), conn->read_overflow);
+ 		assert(scsi_cmnd->tio);
+ 		offset = be32_to_cpu(req->buffer_offset);
+ 		offset += cmnd->pdu.datasize - conn->read_overflow;
+@@ -1125,33 +1201,23 @@
+ 		return;
+ 	}
+ 
+-	if (req->ttt == cpu_to_be32(ISCSI_RESERVED_TAG)) {
+-		if (req->flags & ISCSI_FLG_FINAL) {
++	if (req->flags & ISCSI_FLG_FINAL) {
++		if (req->ttt == cpu_to_be32(ISCSI_RESERVED_TAG))
+ 			scsi_cmnd->is_unsolicited_data = 0;
+-			iscsi_session_push_cmnd(scsi_cmnd);
+-		}
+-	} else {
+-		/* TODO : proper error handling */
+-		if (!(req->flags & ISCSI_FLG_FINAL) && scsi_cmnd->r2t_length == 0)
+-			eprintk("initiator error %x\n", cmnd_itt(scsi_cmnd));
+-
+-		if (!(req->flags & ISCSI_FLG_FINAL))
+-			goto out;
+-
+-		scsi_cmnd->outstanding_r2t--;
++		else
++			scsi_cmnd->outstanding_r2t--;
+ 
+-		if (scsi_cmnd->r2t_length == 0)
++		if (scsi_cmnd->outstanding_r2t == 0)
+ 			assert(list_empty(&scsi_cmnd->pdu_list));
+ 
+ 		iscsi_session_push_cmnd(scsi_cmnd);
+ 	}
+ 
+-out:
+ 	iscsi_cmnd_remove(cmnd);
+ 	return;
+ }
+ 
+-static void __cmnd_abort(struct iscsi_cmnd *cmnd)
++void __cmnd_abort(struct iscsi_cmnd *cmnd)
+ {
+ 	if (cmnd_rxstart(cmnd))
+ 		set_cmnd_tmfabort(cmnd);
+@@ -1410,7 +1476,7 @@
+ 			rsp->tio = req->tio;
+ 		}
+ 
+-		assert(get_pgcnt(req->pdu.datasize, 0) < ISCSI_CONN_IOV_MAX);
++		assert(get_pgcnt(req->pdu.datasize) < ISCSI_CONN_IOV_MAX);
+ 		rsp->pdu.datasize = req->pdu.datasize;
+ 		iscsi_cmnd_init_write(rsp);
+ 	} else {
+@@ -1500,6 +1566,8 @@
+ 	struct iscsi_logout_req_hdr *req_hdr;
+ 	struct iscsi_cmnd *rsp;
+ 	struct iscsi_logout_rsp_hdr *rsp_hdr;
++	struct iscsi_conn *conn;
++	u8 reason;
+ 
+ 	req_hdr = (struct iscsi_logout_req_hdr *)&req->pdu.bhs;
+ 	rsp = iscsi_cmnd_create_rsp_cmnd(req, 1);
+@@ -1507,7 +1575,30 @@
+ 	rsp_hdr->opcode = ISCSI_OP_LOGOUT_RSP;
+ 	rsp_hdr->flags = ISCSI_FLG_FINAL;
+ 	rsp_hdr->itt = req_hdr->itt;
+-	set_cmnd_close(rsp);
++
++	reason = req_hdr->flags & ISCSI_FUNCTION_MASK;
++
++	if (reason == ISCSI_LOGOUT_SESSION)
++		set_cmnd_closeit(rsp);
++	else if (reason == ISCSI_LOGOUT_CONNECTION) {
++		if (req_hdr->cid != req->conn->cid) {
++			conn = conn_lookup(req->conn->session, req_hdr->cid);
++
++			if (!conn)
++				rsp_hdr->response = 1;
++			else if (test_bit(CONN_ACTIVE, &conn->state))
++				rsp_hdr->response = 3;
++			else {
++				/* end time2wait timer for conn */
++			}
++		} else
++			set_cmnd_close(rsp);
++	} else if (reason == ISCSI_LOGOUT_CONNECTION_RECOVER)
++		rsp_hdr->response = 2;
++	else
++		/* protocol error */
++		conn_close(req->conn);
++
+ 	iscsi_cmnd_init_write(rsp);
+ }
+ 
+@@ -1543,10 +1634,8 @@
+ static void __cmnd_send_pdu(struct iscsi_conn *conn, struct tio *tio, u32 offset, u32 size)
+ {
+ 	dprintk(D_GENERIC, "%p %u,%u\n", tio, offset, size);
+-	offset += tio->offset;
+ 
+-	assert(offset <= tio->offset + tio->size);
+-	assert(offset + size <= tio->offset + tio->size);
++	assert(offset + size <= tio->pg_cnt * PAGE_CACHE_SIZE);
+ 
+ 	conn->write_tcmnd = tio;
+ 	conn->write_offset = offset;
+@@ -1701,6 +1790,7 @@
+ 
+ void cmnd_tx_end(struct iscsi_cmnd *cmnd)
+ {
++	struct iscsi_session *session = cmnd->conn->session;
+ 	struct iscsi_conn *conn = cmnd->conn;
+ 
+ 	dprintk(D_GENERIC, "%p:%x\n", cmnd, cmnd_opcode(cmnd));
+@@ -1725,6 +1815,9 @@
+ 
+ 	if (cmnd_close(cmnd))
+ 		conn_close(conn);
++	else if (cmnd_closeit(cmnd))
++		list_for_each_entry(conn, &session->conn_list, list)
++			conn_close(conn);
+ 
+ 	list_del_init(&cmnd->list);
+ 	set_cork(cmnd->conn->sock, 0);
+@@ -1751,6 +1844,9 @@
+ 		return;
+ 	}
+ 
++	if (cmnd->outstanding_r2t)
++		return;
++
+ 	dprintk(D_GENERIC, "%p:%x %u,%u\n",
+ 		cmnd, cmnd_opcode(cmnd), cmnd->pdu.bhs.sn, session->exp_cmd_sn);
+ 
+@@ -1798,11 +1894,8 @@
+ 	if (cmnd->pdu.datasize > param->max_recv_data_length) {
+ 		eprintk("data too long %x %u %u\n", cmnd_itt(cmnd),
+ 			cmnd->pdu.datasize, param->max_recv_data_length);
+-
+-		if (get_pgcnt(cmnd->pdu.datasize, 0) > ISCSI_CONN_IOV_MAX) {
+-			conn_close(conn);
+-			return -EINVAL;
+-		}
++		conn_close(conn);
++		return -EINVAL;
+ 	}
+ 
+ 	return 0;
+diff -uraN iscsitarget-1.4.20.2/kernel/iscsi.h iscsitarget-1.4.20.2-r481/kernel/iscsi.h
+--- iscsitarget-1.4.20.2/kernel/iscsi.h	2010-06-29 18:02:26.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/kernel/iscsi.h	2012-04-28 17:30:31.786275825 -0400
+@@ -9,6 +9,7 @@
+ #define __ISCSI_H__
+ 
+ #include <linux/blkdev.h>
++#include <linux/module.h>
+ #include <linux/completion.h>
+ #include <linux/pagemap.h>
+ #include <linux/seq_file.h>
+@@ -20,6 +21,7 @@
+ #include "iscsi_hdr.h"
+ #include "iet_u.h"
+ #include "compat.h"
++#include "persist.h"
+ 
+ #define IET_SENSE_BUF_SIZE      18
+ 
+@@ -53,16 +55,22 @@
+ 	int nop_timeout;
+ };
+ 
++/* target io */
+ struct tio {
+-	u32 pg_cnt;
++       loff_t offset; /* byte offset on target */
++       u32 size; /* total io bytes */
+ 
+-	pgoff_t idx;
+-	u32 offset;
+-	u32 size;
++       u32 pg_cnt; /* total page count */
++       struct page **pvec; /* array of pages holding data */
+ 
+-	struct page **pvec;
++       atomic_t count; /* ref count */
++};
+ 
+-	atomic_t count;
++struct tio_iterator {
++	struct tio *tio;
++	u32 size;
++	u32 pg_idx;
++	u32 pg_off;
+ };
+ 
+ struct network_thread_info {
+@@ -130,7 +138,7 @@
+ 	/* Points either to own list or global pool */
+ 	struct worker_thread_info * wthread_info;
+ 
+-	struct semaphore target_sem;
++	struct mutex target_mutex;
+ };
+ 
+ struct iscsi_queue {
+@@ -157,7 +165,7 @@
+ 	u32 blk_shift;
+ 	u64 blk_cnt;
+ 
+-	u64 reserve_sid;
++	struct reservation reservation;
+ 	spinlock_t reserve_lock;
+ 
+ 	unsigned long flags;
+@@ -212,6 +220,7 @@
+ 	struct list_head ua_hash[UA_HASH_LEN];
+ 
+ 	u32 next_ttt;
++
+ };
+ 
+ enum connection_state_bit {
+@@ -296,6 +305,7 @@
+ 
+ 	u32 r2t_sn;
+ 	u32 r2t_length;
++	u32 exp_offset;
+ 	u32 is_unsolicited_data;
+ 	u32 target_task_tag;
+ 	u32 outstanding_r2t;
+@@ -334,6 +344,8 @@
+ extern void iscsi_cmnd_set_sense(struct iscsi_cmnd *, u8 sense_key, u8 asc,
+ 				 u8 ascq);
+ extern void send_nop_in(struct iscsi_conn *);
++extern u32 translate_lun(u16 *data);
++extern void __cmnd_abort(struct iscsi_cmnd *cmnd);
+ 
+ /* conn.c */
+ extern struct iscsi_conn *conn_lookup(struct iscsi_session *, u16);
+@@ -379,6 +391,7 @@
+ extern struct iscsi_session *session_lookup(struct iscsi_target *, u64);
+ extern int session_add(struct iscsi_target *, struct session_info *);
+ extern int session_del(struct iscsi_target *, u64);
++extern void session_abort_tasks(struct iscsi_session *, u32 lun);
+ 
+ /* volume.c */
+ extern struct file_operations volume_seq_fops;
+@@ -390,7 +403,7 @@
+ extern void volume_put(struct iet_volume *);
+ extern int volume_reserve(struct iet_volume *volume, u64 sid);
+ extern int volume_release(struct iet_volume *volume, u64 sid, int force);
+-extern int is_volume_reserved(struct iet_volume *volume, u64 sid);
++extern int is_volume_reserved(struct iet_volume *volume, u64 sid, u8 *scb);
+ 
+ /* tio.c */
+ extern int tio_init(void);
+@@ -403,6 +416,13 @@
+ extern int tio_write(struct iet_volume *, struct tio *);
+ extern int tio_sync(struct iet_volume *, struct tio *);
+ 
++extern void tio_init_iterator(struct tio *tio,
++			      struct tio_iterator *iter);
++
++extern size_t tio_add_data(struct tio_iterator *iter,
++			   const u8 *data,
++			   size_t len);
++
+ /* iotype.c */
+ extern struct iotype *get_iotype(const char *name);
+ extern void put_iotype(struct iotype *iot);
+@@ -433,7 +453,7 @@
+ void ua_establish_for_all_sessions(struct iscsi_target *, u32 lun, u8 asc,
+ 				   u8 ascq);
+ 
+-#define get_pgcnt(size, offset)	((((size) + ((offset) & ~PAGE_CACHE_MASK)) + PAGE_CACHE_SIZE - 1) >> PAGE_CACHE_SHIFT)
++#define get_pgcnt(size)	(((size) + PAGE_CACHE_SIZE - 1) >> PAGE_CACHE_SHIFT)
+ 
+ static inline void iscsi_cmnd_get_length(struct iscsi_pdu *pdu)
+ {
+@@ -467,6 +487,9 @@
+ #define cmnd_scsicode(cmnd) cmnd_hdr(cmnd)->scb[0]
+ #define cmnd_immediate(cmnd) ((cmnd)->pdu.bhs.opcode & ISCSI_OP_IMMEDIATE)
+ 
++#define PAD_TO_4_BYTES(n)				\
++	(((n) + 3) & -4)
++
+ /* default and maximum scsi level block sizes */
+ #define IET_DEF_BLOCK_SIZE	512
+ #define IET_MAX_BLOCK_SIZE	4096
+@@ -477,6 +500,7 @@
+ 	CMND_final,
+ 	CMND_waitio,
+ 	CMND_close,
++	CMND_closeit,
+ 	CMND_lunit,
+ 	CMND_pending,
+ 	CMND_tmfabort,
+@@ -499,6 +523,9 @@
+ #define set_cmnd_close(cmnd)	set_bit(CMND_close, &(cmnd)->flags)
+ #define cmnd_close(cmnd)	test_bit(CMND_close, &(cmnd)->flags)
+ 
++#define set_cmnd_closeit(cmnd)	set_bit(CMND_closeit, &(cmnd)->flags)
++#define cmnd_closeit(cmnd)	test_bit(CMND_closeit, &(cmnd)->flags)
++
+ #define set_cmnd_lunit(cmnd)	set_bit(CMND_lunit, &(cmnd)->flags)
+ #define cmnd_lunit(cmnd)	test_bit(CMND_lunit, &(cmnd)->flags)
+ 
+diff -uraN iscsitarget-1.4.20.2/kernel/iscsi_dbg.h iscsitarget-1.4.20.2-r481/kernel/iscsi_dbg.h
+--- iscsitarget-1.4.20.2/kernel/iscsi_dbg.h	2009-09-04 11:27:48.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/kernel/iscsi_dbg.h	2012-04-28 17:30:31.788275803 -0400
+@@ -11,6 +11,8 @@
+ #define D_TASK_MGT	(1UL << 7)
+ #define D_IOMODE	(1UL << 8)
+ #define D_UAC           (1UL << 9)
++#define D_PR            (1UL << 10)
++#define D_VAAI		(1UL << 11)
+ 
+ #define D_DATA		(D_READ | D_WRITE)
+ 
+@@ -18,12 +20,15 @@
+ 
+ #define PFX "iscsi_trgt: "
+ 
+-#define dprintk(debug, fmt, args...) do {			\
+-	if ((debug) & debug_enable_flags) {			\
+-		printk(KERN_DEBUG PFX "%s(%d) " fmt, __FUNCTION__,\
+-						__LINE__, args);\
+-	}							\
+-} while (0)
++#define dprintk(debug, fmt, args...)					\
++	do {								\
++		if ((debug) & debug_enable_flags) {			\
++			printk(KERN_DEBUG PFX "%s(%d) " fmt,		\
++			       __FUNCTION__,				\
++			       __LINE__,				\
++			       ##args);					\
++		}							\
++	} while (0)
+ 
+ #define dprintk_ua(ua, sess, lun)					\
+ 	dprintk(D_UAC, "sess %llu, lun %u: %p %x %x\n",			\
+@@ -31,21 +36,34 @@
+ 		(ua) ? (ua)->asc : 0,					\
+ 		(ua) ? (ua)->ascq : 0)
+ 
+-#define eprintk(fmt, args...) do {				\
+-	printk(KERN_ERR PFX "%s(%d) " fmt, __FUNCTION__,	\
+-						__LINE__, args);\
+-} while (0)
++#define dprintk_pr(cmd, fmt, args...)					\
++	dprintk(D_PR, "%#Lx:%hu, lun %u, cmnd %p: " fmt,		\
++		cmnd->conn->session->sid,				\
++		cmnd->conn->cid,					\
++		cmnd->lun->lun,						\
++		cmnd,							\
++		##args)
++
++#define eprintk(fmt, args...)						\
++	do {								\
++		printk(KERN_ERR PFX "%s(%d) " fmt,			\
++		       __FUNCTION__,					\
++		       __LINE__,					\
++		       ##args);						\
++	} while (0)
+ 
+ #define iprintk(X...) printk(KERN_INFO PFX X)
+ 
+-#define assert(p) do {						\
+-	if (!(p)) {						\
+-		printk(KERN_CRIT PFX "BUG at %s:%d assert(%s)\n",\
+-		       __FILE__, __LINE__, #p);			\
+-		dump_stack();					\
+-		BUG();						\
+-	}							\
+-} while (0)
++/* this has to go away - use BUG() and friends instead */
++#define assert(p)							\
++	do {								\
++		if (!(p)) {						\
++			printk(KERN_CRIT PFX "BUG at %s:%d assert(%s)\n", \
++			       __FILE__, __LINE__, #p);			\
++			dump_stack();					\
++			BUG();						\
++		}							\
++	} while (0)
+ 
+ #ifdef D_IOV
+ static inline void iscsi_dump_iov(struct msghdr *msg)
+diff -uraN iscsitarget-1.4.20.2/kernel/iscsi_hdr.h iscsitarget-1.4.20.2-r481/kernel/iscsi_hdr.h
+--- iscsitarget-1.4.20.2/kernel/iscsi_hdr.h	2009-10-08 14:29:17.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/kernel/iscsi_hdr.h	2012-04-28 17:30:31.785275836 -0400
+@@ -428,6 +428,10 @@
+ 	u32 rsvd5;
+ } __packed;
+ 
++#define ISCSI_LOGOUT_SESSION			0
++#define ISCSI_LOGOUT_CONNECTION			1
++#define ISCSI_LOGOUT_CONNECTION_RECOVER		2
++
+ struct iscsi_snack_req_hdr {
+ 	u8  opcode;
+ 	u8  flags;
+diff -uraN iscsitarget-1.4.20.2/kernel/nthread.c iscsitarget-1.4.20.2-r481/kernel/nthread.c
+--- iscsitarget-1.4.20.2/kernel/nthread.c	2010-03-30 14:03:02.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/kernel/nthread.c	2012-04-28 17:30:31.787275814 -0400
+@@ -6,6 +6,8 @@
+  * This code is licenced under the GPL.
+  */
+ 
++#include <linux/module.h>
++#include <linux/file.h>
+ #include <linux/sched.h>
+ #include <linux/file.h>
+ #include <linux/kthread.h>
+@@ -242,7 +244,7 @@
+ 	case RX_CHECK_HDIGEST:
+ 		rx_hdigest(conn, RX_INIT_DATA);
+ 		if (conn->read_state != RX_INIT_DATA)
+-			break;
++			return -EIO;
+ 	case RX_INIT_DATA:
+ 		cmnd_rx_start(cmnd);
+ 		conn->read_state = cmnd->pdu.datasize ? RX_DATA : RX_END;
+@@ -261,6 +263,8 @@
+ 			break;
+ 	case RX_CHECK_DDIGEST:
+ 		rx_ddigest(conn, RX_END);
++		if (conn->read_state != RX_END)
++			return -EIO;
+ 		break;
+ 	default:
+ 		eprintk("%d %d %x\n", res, conn->read_state, cmnd_opcode(cmnd));
+diff -uraN iscsitarget-1.4.20.2/kernel/param.c iscsitarget-1.4.20.2-r481/kernel/param.c
+--- iscsitarget-1.4.20.2/kernel/param.c	2010-04-08 16:45:28.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/kernel/param.c	2012-04-28 17:30:31.784275847 -0400
+@@ -51,6 +51,7 @@
+ 	CHECK_PARAM(info, iparam, error_recovery_level, 0, 0);
+ 	CHECK_PARAM(info, iparam, data_pdu_inorder, 1, 1);
+ 	CHECK_PARAM(info, iparam, data_sequence_inorder, 1, 1);
++	CHECK_PARAM(info, iparam, default_retain_time, 0, 0);
+ 
+ 	digest_alg_available(&iparam[key_header_digest]);
+ 	digest_alg_available(&iparam[key_data_digest]);
+diff -uraN iscsitarget-1.4.20.2/kernel/persist.c iscsitarget-1.4.20.2-r481/kernel/persist.c
+--- iscsitarget-1.4.20.2/kernel/persist.c	1969-12-31 19:00:00.000000000 -0500
++++ iscsitarget-1.4.20.2-r481/kernel/persist.c	2012-04-28 17:30:31.788275803 -0400
+@@ -0,0 +1,789 @@
++/*
++ * Copyright (C) 2011 Shivaram U, shivaram.u@quadstor.com
++ *
++ * Released under the terms of the GNU GPL v2.0.
++ */
++
++#include <scsi/scsi.h>
++#include "iscsi.h"
++#include "iscsi_dbg.h"
++#include "persist.h"
++
++static bool
++pr_is_reserved_by_sid(const struct reservation *res,
++		      const u64 sid)
++{
++	if (!pr_is_reserved(res))
++		return false;
++
++	if (pr_type_is_all_registrants(res)) {
++		return pr_initiator_has_registered(res, sid);
++	} else {
++		return res->sid == sid;
++	}
++}
++
++bool
++pr_is_reserved_by_session(const struct reservation *res,
++			  const struct iscsi_session *sess)
++{
++	return pr_is_reserved_by_sid(res, sess->sid);
++}
++
++bool
++pr_initiator_has_registered(const struct reservation *res,
++			    u64 sid)
++{
++	struct registration *reg;
++
++	list_for_each_entry(reg, &res->registration_list, r_list) {
++		if (reg->sid == sid)
++			return true;
++	}
++
++	return false;
++}
++
++static const struct pr_in_report_capabilities_data pr_capabilities = {
++	.length = cpu_to_be16(8),
++	.crh_sip_atp_ptpl_c = 0,
++	.tmv_ptpl_a = PR_IN_REPORT_CAP_TMV,
++	.type_mask = cpu_to_be16(PR_TYPE_WR_EX|
++				 PR_TYPE_EX_AC|
++				 PR_TYPE_WR_EX_RO|
++				 PR_TYPE_EX_AC_RO|
++				 PR_TYPE_WR_EX_AR|
++				 PR_TYPE_EX_AC_AR),
++};
++
++static void
++pr_in_report_capabilities(struct iscsi_cmnd *cmnd,
++			  u16 allocation_length)
++{
++	u8 *data = page_address(cmnd->tio->pvec[0]);
++	const u32 min_len = min_t(u16, allocation_length, sizeof(pr_capabilities));
++
++	BUG_ON(!data);
++
++	memcpy(data, &pr_capabilities, min_len);
++	tio_set(cmnd->tio, min_len, 0);
++
++	dprintk_pr(cmnd, "ret len %u\n", min_len);
++}
++
++static void
++pr_in_read_reservation(struct iscsi_cmnd *cmnd,
++		       u16 allocation_length)
++{
++	struct iet_volume *volume = cmnd->lun;
++	const struct reservation *reservation = &volume->reservation;
++	struct pr_in_read_reservation_data *pin_data =
++		(struct pr_in_read_reservation_data *)page_address(cmnd->tio->pvec[0]);
++	u32 size;
++
++	BUG_ON(!pin_data);
++	memset(pin_data, 0x0, sizeof(*pin_data));
++
++	spin_lock(&volume->reserve_lock);
++	pin_data->generation = cpu_to_be32(reservation->generation);
++
++	if (pr_is_reserved(reservation)) {
++		if (pr_type_is_all_registrants(reservation))
++			pin_data->reservation_key = 0;
++		else
++			pin_data->reservation_key = reservation->reservation_key;
++		pin_data->scope_type = PR_SCOPE_LU | reservation->persistent_type;
++		/*
++		 * SPC-3, 6.11.3.2
++		 * "The ADDITIONAL LENGTH field contains a count of the number of
++		 * bytes to follow and shall be set to 16"
++		 */
++		pin_data->additional_length = cpu_to_be32(16);
++		size = sizeof(*pin_data);
++
++		dprintk_pr(cmnd, "key %#Lx, size %u\n",
++			   pin_data->reservation_key,
++			   size);
++	} else {
++		size = 8; /* generation + additional length */
++
++		dprintk_pr(cmnd,
++			   "size %u\n",
++			   size);
++	}
++
++
++	spin_unlock(&volume->reserve_lock);
++
++
++	tio_set(cmnd->tio, min_t(u32, size, allocation_length), 0);
++}
++
++static void
++pr_in_read_full_status(struct iscsi_cmnd *cmnd,
++		       u16 allocation_length)
++{
++	struct iet_volume *volume = cmnd->lun;
++	const struct reservation *reservation = &volume->reservation;
++	struct tio_iterator tio_it;
++	struct pr_in_read_full_status_data *pfull =
++		(struct pr_in_read_full_status_data *)page_address(cmnd->tio->pvec[0]);
++	struct registration *reg;
++	u16 left = (allocation_length > sizeof(*pfull)) ?
++		allocation_length - sizeof(*pfull) :
++		0;
++	u32 addl_data_len = 0;
++
++	tio_init_iterator(cmnd->tio, &tio_it);
++	tio_it.pg_off += sizeof(*pfull);
++
++	spin_lock(&volume->reserve_lock);
++
++	pfull->generation = cpu_to_be32(reservation->generation);
++
++	list_for_each_entry(reg, &reservation->registration_list, r_list) {
++		const size_t init_name_len = PAD_TO_4_BYTES(strlen(reg->init_name));
++		const struct iscsi_transport_id tid = {
++			.fmt_code_proto_id =
++			TRANSPORT_ID_FMT_CODE_ISCSI|TRANSPORT_ID_PROTO_ID_ISCSI,
++			.additional_length = cpu_to_be16(init_name_len),
++		};
++		const struct pr_in_full_status_descriptor desc = {
++			.reservation_key = reg->reservation_key,
++			.all_tg_pt_r_holder =
++			    pr_is_reserved_by_sid(reservation, reg->sid),
++			.scope_type = PR_SCOPE_LU|reservation->persistent_type,
++			/* only rel_tgt_port_id 1 is supported */
++			.rel_tgt_port_id = cpu_to_be16(1),
++			.additional_desc_length = cpu_to_be32(sizeof(tid) + init_name_len),
++		};
++
++		left -= tio_add_data(&tio_it,
++				     (const u8 *)&desc,
++				     min_t(u16, left, sizeof(desc)));
++
++		left -= tio_add_data(&tio_it,
++				     (const u8 *)&tid,
++				     min_t(u16, left, sizeof(tid)));
++
++		left -= tio_add_data(&tio_it,
++				     (const u8 *)reg->init_name,
++				     min_t(u16, left, init_name_len));
++
++		addl_data_len += sizeof(desc) + sizeof(tid) + init_name_len;
++
++		dprintk_pr(cmnd,
++			   "init name %s, sess %#Lx, key %#Lx, rtype %d, scope_type %x, all_tg_pt_r_holder %x, desc.addlen %u, tid.addlen %u, addlen %u, left %u\n",
++			   reg->init_name,
++			   reg->sid,
++			   reg->reservation_key,
++			   reservation->reservation_type,
++			   desc.scope_type,
++			   desc.all_tg_pt_r_holder,
++			   be32_to_cpu(desc.additional_desc_length),
++			   be16_to_cpu(tid.additional_length),
++			   addl_data_len,
++			   left);
++	}
++
++	spin_unlock(&volume->reserve_lock);
++
++	dprintk_pr(cmnd,
++		   "dlen %u, tlen %u\n",
++		   addl_data_len,
++		   allocation_length - left);
++
++	pfull->additional_length = cpu_to_be32(addl_data_len);
++	tio_set(cmnd->tio, allocation_length - left, 0);
++}
++
++static void
++pr_in_read_keys(struct iscsi_cmnd *cmnd,
++		u16 allocation_length)
++{
++	struct iet_volume *volume = cmnd->lun;
++	const struct reservation *reservation = &volume->reservation;
++	struct tio_iterator tio_it;
++	struct pr_in_read_keys_data *kdata =
++		(struct pr_in_read_keys_data *)page_address(cmnd->tio->pvec[0]);
++	struct registration *reg;
++	u16 left = (allocation_length >= sizeof(*kdata)) ?
++		allocation_length - sizeof(*kdata) :
++		0;
++	u32 addl_data_len = 0;
++
++	tio_init_iterator(cmnd->tio, &tio_it);
++	tio_it.pg_off += sizeof(*kdata);
++
++	spin_lock(&volume->reserve_lock);
++
++	kdata->generation = cpu_to_be32(reservation->generation);
++
++	list_for_each_entry(reg, &reservation->registration_list, r_list) {
++
++		left -= tio_add_data(&tio_it,
++				     (const u8 *)&reg->reservation_key,
++				     min_t(u16,
++					   left,
++					   sizeof(reg->reservation_key)));
++
++		addl_data_len += sizeof(reg->reservation_key);
++
++		dprintk_pr(cmnd,
++			   "found reg, init name %s, sess %#Lx, key %#Lx, kdata len %u, left %u\n",
++			   reg->init_name,
++			   reg->sid,
++			   reg->reservation_key,
++			   addl_data_len,
++			   left);
++	}
++
++	spin_unlock(&volume->reserve_lock);
++
++	dprintk_pr(cmnd,
++		   "dlen %u, tlen %u\n",
++		   addl_data_len,
++		   allocation_length - left);
++
++	kdata->additional_length = cpu_to_be32(addl_data_len);
++	tio_set(cmnd->tio, allocation_length - left, 0);
++
++	dprintk_pr(cmnd,
++		   "keys[0]: %#Lx\n", kdata->keys[0]);
++}
++
++void
++build_persistent_reserve_in_response(struct iscsi_cmnd *cmnd)
++{
++	const struct persistent_reserve_in *pr_in =
++		(const struct persistent_reserve_in *)(cmnd_hdr(cmnd)->scb);
++	const u16 allocation_length = be16_to_cpu(pr_in->allocation_length);
++	const enum pr_in_service_actions action =
++		pr_in->service_action & PR_SERVICE_ACTION_MASK;
++
++	dprintk_pr(cmnd,
++		   "svc action %x, alloc len %u\n",
++		   action,
++		   allocation_length);
++
++	switch (action) {
++	case SERVICE_ACTION_READ_KEYS:
++	case SERVICE_ACTION_READ_RESERVATION:
++	case SERVICE_ACTION_REPORT_CAPABILITIES:
++	case SERVICE_ACTION_READ_FULL_STATUS:
++		if (allocation_length == 0)
++			return;
++		cmnd->tio = tio_alloc(get_pgcnt(allocation_length));
++		break;
++	default:
++		eprintk("%#Lx:%hu: invalid PR In Service Action %x\n",
++			cmnd->conn->session->sid,
++			cmnd->conn->cid,
++			action);
++		iscsi_cmnd_set_sense(cmnd,
++				     ILLEGAL_REQUEST,
++				     INVALID_FIELD_IN_CDB_ASC,
++				     INVALID_FIELD_IN_CDB_ASCQ);
++		return;
++	}
++
++	switch (action) {
++	case SERVICE_ACTION_READ_KEYS:
++		pr_in_read_keys(cmnd, allocation_length);
++		break;
++	case SERVICE_ACTION_READ_RESERVATION:
++		pr_in_read_reservation(cmnd, allocation_length);
++		break;
++	case SERVICE_ACTION_REPORT_CAPABILITIES:
++		pr_in_report_capabilities(cmnd, allocation_length);
++		break;
++	case SERVICE_ACTION_READ_FULL_STATUS:
++		pr_in_read_full_status(cmnd, allocation_length);
++		break;
++	}
++}
++
++static void
++pr_out_register(struct iscsi_cmnd *cmnd, bool ignore)
++{
++	const struct pr_out_param_list *param =
++		(const struct pr_out_param_list *)page_address(cmnd->tio->pvec[0]);
++	struct iscsi_session *session = cmnd->conn->session;
++	struct iet_volume *volume = cmnd->lun;
++	struct reservation *reservation = &volume->reservation;
++	struct registration *reg;
++	struct registration *new_reg = kzalloc(sizeof(*new_reg), GFP_KERNEL);
++
++	dprintk_pr(cmnd, "rkey %#Lx, skey %#Lx, spec_i_pt_all_tg_pt_aptl %x ignore %d\n",
++		   param->reservation_key,
++		   param->service_action_key,
++		   param->spec_i_pt_all_tg_pt_aptl,
++		   ignore);
++
++	if (!new_reg) {
++		eprintk("%#Lx:%hu: failed to alloc new registration\n",
++			cmnd->conn->session->sid,
++			cmnd->conn->cid);
++
++		iscsi_cmnd_set_sense(cmnd,
++				     /* TODO: verify sense key / asc / ascq */
++				     ILLEGAL_REQUEST,
++				     INSUFFICIENT_REGISTRATION_RESOURCES_ASC,
++				     INSUFFICIENT_REGISTRATION_RESOURCES_ASCQ);
++		return;
++	}
++
++	spin_lock(&volume->reserve_lock);
++
++	list_for_each_entry(reg, &reservation->registration_list, r_list) {
++		dprintk_pr(cmnd,
++			   "found reg, init name %s, sess %#Lx, key %#Lx\n",
++			   reg->init_name,
++			   reg->sid,
++			   reg->reservation_key);
++
++		if (reg->sid != session->sid)
++			continue;
++
++		if (!ignore && param->reservation_key != reg->reservation_key) {
++			iscsi_cmnd_set_sense(cmnd,
++					     ILLEGAL_REQUEST,
++					     INVALID_COMMAND_OPERATION_CODE_ASC,
++					     INVALID_COMMAND_OPERATION_CODE_ASCQ);
++			goto out;
++		}
++
++		if ((param->spec_i_pt_all_tg_pt_aptl & PR_OUT_PARAM_SPEC_I_PT)) {
++			iscsi_cmnd_set_sense(cmnd,
++					     ILLEGAL_REQUEST,
++					     INVALID_FIELD_IN_CDB_ASC,
++					     INVALID_FIELD_IN_CDB_ASCQ);
++			goto out;
++		}
++
++		if (!param->service_action_key) {
++			if (pr_is_reserved_by_session(reservation, session) &&
++			    !pr_type_is_all_registrants(reservation)) {
++				reservation->reservation_type = RESERVATION_TYPE_NONE;
++				reservation->persistent_type = 0;
++				reservation->reservation_key = 0;
++				ua_establish_for_other_sessions(session,
++								volume->lun,
++								RESERVATIONS_RELEASED_ASC,
++								RESERVATIONS_RELEASED_ASCQ);
++			}
++			list_del(&reg->r_list);
++			kfree(reg);
++			if (list_empty(&reservation->registration_list) &&
++			    pr_type_is_all_registrants(reservation)) {
++				reservation->reservation_type = RESERVATION_TYPE_NONE;
++				reservation->persistent_type = 0;
++				reservation->reservation_key = 0;
++			}
++		} else {
++			reg->reservation_key = param->service_action_key;
++		}
++		reservation->generation++;
++		goto out;
++	}
++
++	if (!param->reservation_key && !param->service_action_key) {
++		reservation->generation++;
++		goto out;
++	}
++
++	if (param->reservation_key) {
++		cmnd->status = SAM_STAT_RESERVATION_CONFLICT;
++		goto out;
++	}
++
++	new_reg->sid = session->sid;
++	new_reg->reservation_key = param->service_action_key;
++	strncpy(new_reg->init_name,
++		cmnd->conn->session->initiator,
++		sizeof(new_reg->init_name));
++
++	INIT_LIST_HEAD(&new_reg->r_list);
++	list_add_tail(&new_reg->r_list, &reservation->registration_list);
++	reservation->generation++;
++
++	spin_unlock(&volume->reserve_lock);
++
++	dprintk_pr(cmnd,
++		   "init_name %s, key %#Lx, generation %u\n",
++		   new_reg->init_name,
++		   new_reg->reservation_key,
++		   reservation->generation);
++
++	return;
++out:
++	kfree(new_reg);
++	spin_unlock(&volume->reserve_lock);
++}
++
++static bool
++persistent_type_valid(int type)
++{
++	switch (type) {
++	case PR_TYPE_WRITE_EXCLUSIVE:
++	case PR_TYPE_EXCLUSIVE_ACCESS:
++	case PR_TYPE_WRITE_EXCLUSIVE_REGISTRANTS_ONLY:
++	case PR_TYPE_EXCLUSIVE_ACCESS_REGISTRANTS_ONLY:
++	case PR_TYPE_WRITE_EXCLUSIVE_ALL_REGISTRANTS:
++	case PR_TYPE_EXCLUSIVE_ACCESS_ALL_REGISTRANTS:
++		return true;
++	default:
++		return false;
++	}
++}
++
++static void
++pr_out_reserve(struct iscsi_cmnd *cmnd, enum persistent_reservation_type type)
++{
++	const struct pr_out_param_list *param =
++		(const struct pr_out_param_list *)page_address(cmnd->tio->pvec[0]);
++	bool registered;
++	struct iscsi_session *session = cmnd->conn->session;
++	struct iet_volume *volume = cmnd->lun;
++	struct reservation *reservation = &volume->reservation;
++
++	spin_lock(&volume->reserve_lock);
++
++	registered = pr_initiator_has_registered(reservation, session->sid);
++	if (!registered) {
++		cmnd->status = SAM_STAT_RESERVATION_CONFLICT;
++		goto out;
++	}
++
++	if (pr_is_reserved(reservation) && reservation->sid != session->sid) {
++		cmnd->status = SAM_STAT_RESERVATION_CONFLICT;
++		goto out;
++	}
++
++	if (pr_is_reserved(reservation) &&
++	    reservation->reservation_key != param->reservation_key) {
++		cmnd->status = SAM_STAT_RESERVATION_CONFLICT;
++		goto out;
++	}
++
++	if (pr_is_reserved(reservation) && reservation->persistent_type != type) {
++		cmnd->status = SAM_STAT_RESERVATION_CONFLICT;
++		goto out;
++	}
++
++	if (pr_is_reserved(reservation))
++		goto out;
++
++	if (!persistent_type_valid(type)) {
++		iscsi_cmnd_set_sense(cmnd,
++				     ILLEGAL_REQUEST,
++				     INVALID_FIELD_IN_CDB_ASC,
++				     INVALID_FIELD_IN_CDB_ASCQ);
++		goto out;
++	}
++
++	reservation->reservation_type = RESERVATION_TYPE_PERSISTENT;
++	reservation->persistent_type = type;
++	reservation->reservation_key = param->reservation_key;
++	reservation->sid = session->sid;
++
++	dprintk_pr(cmnd,
++		   "key %#Lx, sess %#Lx, generation %u, rtype %d, ptype %d\n",
++		   reservation->reservation_key,
++		   reservation->sid,
++		   reservation->generation,
++		   reservation->reservation_type,
++		   reservation->persistent_type);
++
++out:
++	spin_unlock(&volume->reserve_lock);
++}
++
++static void
++pr_out_release(struct iscsi_cmnd *cmnd,
++	       enum persistent_reservation_type type)
++{
++	const struct pr_out_param_list *param =
++		(const struct pr_out_param_list *)page_address(cmnd->tio->pvec[0]);
++	bool registered;
++	struct iscsi_session *session = cmnd->conn->session;
++	struct iet_volume *volume = cmnd->lun;
++	struct reservation *reservation = &volume->reservation;
++	bool send_ua;
++
++	spin_lock(&volume->reserve_lock);
++	if (!pr_is_reserved(reservation))
++		goto out;
++
++	registered = pr_initiator_has_registered(reservation, session->sid);
++	if (!registered) {
++		cmnd->status = SAM_STAT_RESERVATION_CONFLICT;
++		goto out;
++	}
++
++	if (!pr_type_is_all_registrants(reservation)) {
++		if (reservation->sid != session->sid)
++			goto out;
++		if (reservation->reservation_key != param->reservation_key) {
++			cmnd->status = SAM_STAT_RESERVATION_CONFLICT;
++			goto out;
++		}
++	}
++
++	switch (reservation->persistent_type) {
++	case PR_TYPE_WRITE_EXCLUSIVE_REGISTRANTS_ONLY:
++	case PR_TYPE_EXCLUSIVE_ACCESS_REGISTRANTS_ONLY:
++	case PR_TYPE_WRITE_EXCLUSIVE_ALL_REGISTRANTS:
++	case PR_TYPE_EXCLUSIVE_ACCESS_ALL_REGISTRANTS:
++		send_ua = true;
++		break;
++	default:
++		send_ua = false;
++	}
++
++	dprintk_pr(cmnd,
++		   "key %#Lx, sess %#Lx, generation %u, rtype %d, ptype %d, ua %d\n",
++		   reservation->reservation_key,
++		   reservation->sid,
++		   reservation->generation,
++		   reservation->reservation_type,
++		   reservation->persistent_type,
++		   send_ua);
++
++	reservation->reservation_type = RESERVATION_TYPE_NONE;
++	reservation->persistent_type = PR_TYPE_NONE;
++	reservation->reservation_key = 0;
++
++	if (send_ua)
++		ua_establish_for_other_sessions(session,
++						volume->lun,
++						RESERVATIONS_RELEASED_ASC,
++						RESERVATIONS_RELEASED_ASCQ);
++out:
++	spin_unlock(&volume->reserve_lock);
++}
++
++static void
++pr_out_clear(struct iscsi_cmnd *cmnd)
++{
++	bool registered;
++	struct iscsi_session *tmp_session, *session = cmnd->conn->session;
++	struct iscsi_target *target = session->target;
++	struct iet_volume *volume = cmnd->lun;
++	struct reservation *reservation = &volume->reservation;
++	struct registration *reg, *tmp_reg;
++
++	spin_lock(&volume->reserve_lock);
++	registered = pr_initiator_has_registered(reservation, session->sid);
++	if (!registered) {
++		cmnd->status = SAM_STAT_RESERVATION_CONFLICT;
++		goto out;
++	}
++
++	list_for_each_entry_safe(reg, tmp_reg, &reservation->registration_list, r_list) {
++		if (reg->sid != session->sid) {
++			tmp_session = session_lookup(target, reg->sid);
++			if (tmp_session)
++				ua_establish_for_session(session,
++							 volume->lun,
++							 RESERVATIONS_PREEMPTED_ASC,
++							 RESERVATIONS_PREEMPTED_ASCQ);
++		}
++		list_del(&reg->r_list);
++		kfree(reg);
++	}
++
++	dprintk_pr(cmnd,
++		   "key %#Lx, sess %#Lx, generation %u, rtype %d, ptype %d\n",
++		   reservation->reservation_key,
++		   reservation->sid,
++		   reservation->generation,
++		   reservation->reservation_type,
++		   reservation->persistent_type);
++
++	reservation->reservation_type = RESERVATION_TYPE_NONE;
++	reservation->persistent_type = PR_TYPE_NONE;
++	reservation->reservation_key = 0;
++	reservation->generation++;
++out:
++	spin_unlock(&volume->reserve_lock);
++}
++
++static void
++pr_out_preempt(struct iscsi_cmnd *cmnd,
++	       enum persistent_reservation_type pr_type,
++	       bool abort)
++{
++	const struct pr_out_param_list *param =
++		(const struct pr_out_param_list *)page_address(cmnd->tio->pvec[0]);
++	struct registration *reg, *tmp_reg;
++	bool registered;
++	struct iscsi_session *session = cmnd->conn->session;
++	struct iscsi_session *reserv_session;
++	struct iscsi_target *target = session->target;
++	struct iet_volume *volume = cmnd->lun;
++	struct reservation *reservation = &volume->reservation;
++	bool all = 0;
++
++	spin_lock(&volume->reserve_lock);
++	if (!param->service_action_key &&
++	    !pr_type_is_all_registrants(reservation)) {
++		iscsi_cmnd_set_sense(cmnd,
++				     ILLEGAL_REQUEST,
++				     INVALID_FIELD_IN_PARAMETER_LIST_ASC,
++				     INVALID_FIELD_IN_PARAMETER_LIST_ASCQ);
++		goto out;
++	}
++
++	registered = pr_initiator_has_registered(reservation, session->sid);
++	if (!registered) {
++		cmnd->status = SAM_STAT_RESERVATION_CONFLICT;
++		goto out;
++	}
++
++	if (pr_is_reserved(reservation)) {
++		if ((!pr_type_is_all_registrants(reservation) &&
++		     reservation->reservation_key == param->service_action_key &&
++		     reservation->sid != session->sid) ||
++		    (pr_type_is_all_registrants(reservation) &&
++		     !param->service_action_key)) {
++
++			reserv_session = session_lookup(target, reservation->sid);
++			if (reserv_session) {
++				if (abort)
++					session_abort_tasks(reserv_session,
++					    volume->lun);
++				ua_establish_for_session(reserv_session,
++							 volume->lun,
++							 RESERVATIONS_PREEMPTED_ASC,
++							 RESERVATIONS_PREEMPTED_ASCQ);
++			}
++
++			reservation->reservation_type = RESERVATION_TYPE_PERSISTENT;
++			reservation->sid = session->sid;
++			reservation->reservation_key = param->reservation_key;
++			reservation->persistent_type = pr_type;
++			all = true;
++		}
++	}
++
++	list_for_each_entry_safe(reg, tmp_reg, &reservation->registration_list, r_list) {
++		if (reg->sid == session->sid)
++			continue;
++
++		if (!all &&
++		    reg->reservation_key != param->service_action_key &&
++		    !pr_type_is_all_registrants(reservation))
++			continue;
++
++		reserv_session = session_lookup(target, reg->sid);
++		if (reserv_session)
++			ua_establish_for_session(reserv_session,
++						 volume->lun,
++						 REGISTRATIONS_PREEMPTED_ASC,
++						 REGISTRATIONS_PREEMPTED_ASCQ);
++
++		list_del(&reg->r_list);
++		kfree(reg);
++	}
++
++	reservation->generation++;
++out:
++	spin_unlock(&volume->reserve_lock);
++}
++
++void
++build_persistent_reserve_out_response(struct iscsi_cmnd *cmnd)
++{
++	const struct persistent_reserve_out *pr_out =
++		(const struct persistent_reserve_out *)(cmnd_hdr(cmnd)->scb);
++	const enum pr_out_service_actions action =
++		pr_out->service_action & PR_SERVICE_ACTION_MASK;
++	const u32 param_list_length = be32_to_cpu(pr_out->parameter_list_length);
++
++	dprintk_pr(cmnd,
++		   "svc action %x, scope_type %x, param len %u\n",
++		   action,
++		   pr_out->scope_type,
++		   param_list_length);
++
++	switch (action) {
++	case SERVICE_ACTION_REGISTER:
++	case SERVICE_ACTION_REGISTER_IGNORE:
++	case SERVICE_ACTION_RESERVE:
++	case SERVICE_ACTION_RELEASE:
++	case SERVICE_ACTION_CLEAR:
++	case SERVICE_ACTION_PREEMPT:
++	case SERVICE_ACTION_PREEMPT_ABORT:
++		break;
++	case SERVICE_ACTION_REGISTER_MOVE:
++		/* not implemented (yet) */
++	default:
++		eprintk("%#Lx:%hu: invalid PR Out Service Action %x\n",
++			cmnd->conn->session->sid,
++			cmnd->conn->cid,
++			action);
++		iscsi_cmnd_set_sense(cmnd,
++				     ILLEGAL_REQUEST,
++				     INVALID_FIELD_IN_CDB_ASC,
++				     INVALID_FIELD_IN_CDB_ASCQ);
++		return;
++	}
++
++	if ((pr_out->scope_type & PR_SCOPE_MASK) != PR_SCOPE_LU) {
++		eprintk("%#Lx:%hu: invalid PR scope %x\n",
++			cmnd->conn->session->sid,
++			cmnd->conn->cid,
++			pr_out->scope_type & PR_SCOPE_MASK);
++		iscsi_cmnd_set_sense(cmnd,
++				     ILLEGAL_REQUEST,
++				     INVALID_FIELD_IN_CDB_ASC,
++				     INVALID_FIELD_IN_CDB_ASCQ);
++		return;
++	}
++
++	if (param_list_length < sizeof(struct pr_out_param_list)) {
++		eprintk("%#Lx:%hu: invalid PR Out parameter list length %d\n",
++			cmnd->conn->session->sid,
++			cmnd->conn->cid,
++			param_list_length);
++		iscsi_cmnd_set_sense(cmnd,
++				     ILLEGAL_REQUEST,
++				     PARAMETER_LIST_LENGTH_ERROR_ASC,
++				     PARAMETER_LIST_LENGTH_ERROR_ASCQ);
++		return;
++	}
++
++	switch (action) {
++	case SERVICE_ACTION_REGISTER:
++		pr_out_register(cmnd, false);
++		break;
++	case SERVICE_ACTION_REGISTER_IGNORE:
++		pr_out_register(cmnd, true);
++		break;
++	case SERVICE_ACTION_RESERVE:
++		pr_out_reserve(cmnd, pr_out->scope_type & PR_TYPE_MASK);
++		break;
++	case SERVICE_ACTION_RELEASE:
++		pr_out_release(cmnd, pr_out->scope_type & PR_TYPE_MASK);
++		break;
++	case SERVICE_ACTION_CLEAR:
++		pr_out_clear(cmnd);
++		break;
++	case SERVICE_ACTION_PREEMPT:
++		pr_out_preempt(cmnd,
++			       pr_out->scope_type & PR_TYPE_MASK,
++			       false);
++		break;
++	case SERVICE_ACTION_PREEMPT_ABORT:
++		pr_out_preempt(cmnd,
++			       pr_out->scope_type & PR_TYPE_MASK,
++			       true);
++		break;
++	case SERVICE_ACTION_REGISTER_MOVE:
++		/* not implemented (yet) */
++	default:
++		/* not reachable due to the earlier switch stmt */
++		BUG();
++	}
++}
+diff -uraN iscsitarget-1.4.20.2/kernel/persist.h iscsitarget-1.4.20.2-r481/kernel/persist.h
+--- iscsitarget-1.4.20.2/kernel/persist.h	1969-12-31 19:00:00.000000000 -0500
++++ iscsitarget-1.4.20.2-r481/kernel/persist.h	2012-04-28 17:30:31.783275858 -0400
+@@ -0,0 +1,252 @@
++/*
++ * Copyright (C) 2011 Shivaram U, shivaram.u@quadstor.com
++ *
++ * Released under the terms of the GNU GPL v2.0.
++ */
++#ifndef IET_PERSIST_H_
++#define IET_PERSIST_H_
++
++struct registration {
++	u64 sid;
++	__be64 reservation_key;
++	char init_name[ISCSI_NAME_LEN];
++	struct list_head r_list;
++};
++
++#define PARAMETER_LIST_LENGTH_ERROR_ASC			0x1A
++#define PARAMETER_LIST_LENGTH_ERROR_ASCQ		0x00
++
++#define INVALID_COMMAND_OPERATION_CODE_ASC		0x20
++#define INVALID_COMMAND_OPERATION_CODE_ASCQ		0x00
++
++#define INVALID_FIELD_IN_CDB_ASC			0x24
++#define INVALID_FIELD_IN_CDB_ASCQ			0x00
++
++#define INVALID_FIELD_IN_PARAMETER_LIST_ASC		0x26
++#define INVALID_FIELD_IN_PARAMETER_LIST_ASCQ		0x00
++
++#define INVALID_RELEASE_OF_PERSISTENT_RESERVATION_ASC	0x26
++#define INVALID_RELEASE_OF_PERSISTENT_RESERVATION_ASCQ	0x04
++
++#define RESERVATIONS_PREEMPTED_ASC			0x2A
++#define RESERVATIONS_PREEMPTED_ASCQ			0x03
++
++#define RESERVATIONS_RELEASED_ASC			0x2A
++#define RESERVATIONS_RELEASED_ASCQ			0x04
++
++#define REGISTRATIONS_PREEMPTED_ASC			0x2A
++#define REGISTRATIONS_PREEMPTED_ASCQ			0x05
++
++#define INSUFFICIENT_RESERVATION_RESOURCES_ASC		0x55
++#define INSUFFICIENT_RESERVATION_RESOURCES_ASCQ		0x02
++
++#define INSUFFICIENT_REGISTRATION_RESOURCES_ASC		0x55
++#define INSUFFICIENT_REGISTRATION_RESOURCES_ASCQ	0x04
++
++enum pr_in_service_actions {
++	SERVICE_ACTION_READ_KEYS = 0x0,
++	SERVICE_ACTION_READ_RESERVATION = 0x1,
++	SERVICE_ACTION_REPORT_CAPABILITIES = 0x2,
++	SERVICE_ACTION_READ_FULL_STATUS = 0x3
++};
++
++struct persistent_reserve_in {
++	u8 opcode; /* PERSISTENT_RESERVE_IN == 0x5e */
++	u8 service_action;
++	u8 rsvd[5];
++	__be16 allocation_length;
++	u8 control;
++} __packed;
++
++
++enum pr_type_mask {
++	PR_TYPE_WR_EX_AR = 0x8000, /* Write Excl., All Registrants */
++	PR_TYPE_EX_AC_RO = 0x4000, /* Excl. Access, Registrants Only */
++	PR_TYPE_WR_EX_RO = 0x2000, /* Write Excl., Registrants Only */
++	PR_TYPE_EX_AC = 0x800,     /* Excl. Access */
++	PR_TYPE_WR_EX = 0x200,     /* Write Excl. */
++	PR_TYPE_EX_AC_AR = 0x1,    /* Excl. Access, All Registrants */
++};
++
++enum {
++	PR_IN_REPORT_CAP_PTPL_C = 1,     /* Persist Through Power Loss Capable */
++	PR_IN_REPORT_CAP_ATP_C = 1 << 2, /* All Target Ports Capable */
++	PR_IN_REPORT_CAP_SIP_C = 1 << 3, /* Specify Initiator Ports Capable */
++	PR_IN_REPORT_CAP_CRH = 1 << 4    /* Compatible Reservation Handling */
++};
++
++
++enum {
++	PR_IN_REPORT_CAP_PTPL_A = 1,     /* Persist Through Power Loss Activated */
++	PR_IN_REPORT_CAP_TMV = 1 << 7,   /* Type Mask Valid */
++};
++
++struct pr_in_report_capabilities_data {
++	__be16 length;
++
++	u8 crh_sip_atp_ptpl_c;
++	u8 tmv_ptpl_a;	/* SPC-4 has allow_commands here - don't care for now */
++
++	__be16 type_mask;
++	u8  rsvd4[2];
++} __packed;
++
++enum {
++	PR_SERVICE_ACTION_MASK = 0x1f,
++	PR_TYPE_MASK = 0xf,
++	PR_SCOPE_MASK = 0xf << 4,
++};
++
++struct pr_in_read_reservation_data {
++	__be32 generation;
++	__be32 additional_length;
++	__be64 reservation_key;
++	u8 obsolete1[4];
++	u8 rsvd;
++	u8 scope_type;
++	u8 obsolete2[2];
++} __packed;
++
++enum {
++	TRANSPORT_ID_FMT_CODE_MASK = 0xc0,
++	TRANSPORT_ID_FMT_CODE_ISCSI = 0x0,
++	TRANSPORT_ID_PROTO_ID_MASK = 0xf,
++	TRANSPORT_ID_PROTO_ID_ISCSI = 0x5,
++};
++
++struct iscsi_transport_id {
++	u8 fmt_code_proto_id;
++	u8 rsvd;
++	__be16 additional_length;
++	u8 iscsi_name[0];
++} __packed;
++
++enum {
++	PR_OUT_STATUS_DESC_R_HOLDER = 1,
++	PR_OUT_STATUS_DESC_ALL_TG_PT = 1 << 1,
++};
++
++/* this is iscsi specific */
++struct pr_in_full_status_descriptor {
++	__be64 reservation_key;
++	u8 rsvd1[4];
++
++	u8 all_tg_pt_r_holder;
++	u8 scope_type;
++
++	u8 rsvd2[4];
++	__be16 rel_tgt_port_id;
++	__be32 additional_desc_length;
++	struct iscsi_transport_id iscsi_transport_id[0];
++} __packed;
++
++struct pr_in_read_full_status_data {
++	__be32 generation;
++	__be32 additional_length;
++	struct pr_in_full_status_descriptor descriptors[0];
++} __packed;
++
++struct pr_in_read_keys_data {
++	__be32 generation;
++	__be32 additional_length;
++	__be64 keys[0];
++} __packed;
++
++enum pr_out_service_actions {
++	SERVICE_ACTION_REGISTER = 0x0,
++	SERVICE_ACTION_RESERVE = 0x1,
++	SERVICE_ACTION_RELEASE = 0x2,
++	SERVICE_ACTION_CLEAR = 0x3,
++	SERVICE_ACTION_PREEMPT = 0x4,
++	SERVICE_ACTION_PREEMPT_ABORT = 0x5,
++	SERVICE_ACTION_REGISTER_IGNORE = 0x6,
++	SERVICE_ACTION_REGISTER_MOVE = 0x7
++};
++
++enum persistent_reservation_scope {
++	PR_SCOPE_LU = 0x0,
++};
++
++enum persistent_reservation_type {
++	PR_TYPE_NONE                              = 0x0, /* "abuse" obsolete value */
++	PR_TYPE_WRITE_EXCLUSIVE                   = 0x1,
++	PR_TYPE_EXCLUSIVE_ACCESS                  = 0x3,
++	PR_TYPE_WRITE_EXCLUSIVE_REGISTRANTS_ONLY  = 0x5,
++	PR_TYPE_EXCLUSIVE_ACCESS_REGISTRANTS_ONLY = 0x6,
++	PR_TYPE_WRITE_EXCLUSIVE_ALL_REGISTRANTS   = 0x7,
++	PR_TYPE_EXCLUSIVE_ACCESS_ALL_REGISTRANTS  = 0x8
++};
++
++struct persistent_reserve_out {
++	u8 opcode; /* PERSISTENT_RESERVE_OUT == 0x5f */
++	u8 service_action;
++	u8 scope_type;
++	u8 rsvd[2];
++	__be32 parameter_list_length;
++	u8 control;
++} __packed;
++
++enum {
++	PR_OUT_PARAM_APTPL = 1,
++	PR_OUT_PARAM_ALL_TG_PT = 1 << 2,
++	PR_OUT_PARAM_SPEC_I_PT = 1 << 3,
++};
++
++struct pr_out_param_list {
++	__be64 reservation_key;
++	__be64 service_action_key;
++	u8 obsolete1[4];
++	u8 spec_i_pt_all_tg_pt_aptl;
++	u8 rsvd;
++	u8 obsolete2[2];
++	u8 additional_parameter_data[0];
++} __packed;
++
++enum reservation_type {
++	RESERVATION_TYPE_NONE,
++	RESERVATION_TYPE_RESERVE,
++	RESERVATION_TYPE_PERSISTENT
++};
++
++struct reservation {
++	/* RESERVATION_TYPE_NONE indicates "not reserved" */
++	enum reservation_type reservation_type;
++	enum persistent_reservation_type persistent_type;
++	u32 generation;
++	u64 sid;
++	__be64 reservation_key;
++	struct list_head registration_list;
++};
++
++static inline bool
++pr_is_reserved(const struct reservation* res)
++{
++	return res->reservation_type != RESERVATION_TYPE_NONE;
++}
++
++static inline bool
++pr_type_is_all_registrants(const struct reservation *res)
++{
++	return ((res->persistent_type == PR_TYPE_WRITE_EXCLUSIVE_ALL_REGISTRANTS) ||
++		(res->persistent_type == PR_TYPE_EXCLUSIVE_ACCESS_ALL_REGISTRANTS));
++}
++
++struct iscsi_session;
++
++bool
++pr_is_reserved_by_session(const struct reservation *res,
++			  const struct iscsi_session *sess);
++
++bool
++pr_initiator_has_registered(const struct reservation *res,
++			    u64 sid);
++
++struct iscsi_cmnd;
++
++void
++build_persistent_reserve_out_response(struct iscsi_cmnd *cmnd);
++
++void
++build_persistent_reserve_in_response(struct iscsi_cmnd *cmnd);
++
++#endif
+diff -uraN iscsitarget-1.4.20.2/kernel/session.c iscsitarget-1.4.20.2-r481/kernel/session.c
+--- iscsitarget-1.4.20.2/kernel/session.c	2009-12-24 03:58:08.000000000 -0500
++++ iscsitarget-1.4.20.2-r481/kernel/session.c	2012-04-28 17:30:31.787275814 -0400
+@@ -121,6 +121,22 @@
+ 	return 0;
+ }
+ 
++void
++session_abort_tasks(struct iscsi_session *session, u32 lun)
++{
++	struct iscsi_conn *conn;
++	struct iscsi_cmnd *cmnd, *tmp;
++
++	list_for_each_entry(conn, &session->conn_list, list) {
++		list_for_each_entry_safe(cmnd, tmp, &conn->pdu_list, conn_list) {
++			if (translate_lun(cmnd_hdr(cmnd)->lun) != lun)
++				continue;
++
++			__cmnd_abort(cmnd);
++		}
++	}
++}
++
+ int session_del(struct iscsi_target *target, u64 sid)
+ {
+ 	struct iscsi_session *session;
+diff -uraN iscsitarget-1.4.20.2/kernel/target.c iscsitarget-1.4.20.2-r481/kernel/target.c
+--- iscsitarget-1.4.20.2/kernel/target.c	2010-04-11 12:06:14.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/kernel/target.c	2012-04-28 17:30:31.788275803 -0400
+@@ -4,6 +4,8 @@
+  * Released under the terms of the GNU GPL v2.0.
+  */
+ 
++#include <linux/mutex.h>
++
+ #include "iscsi.h"
+ #include "digest.h"
+ #include "iscsi_dbg.h"
+@@ -11,7 +13,7 @@
+ #define	MAX_NR_TARGETS	(1UL << 30)
+ 
+ static LIST_HEAD(target_list);
+-static DECLARE_MUTEX(target_list_sem);
++static DEFINE_MUTEX(target_list_mutex);
+ static u32 next_target_id;
+ static u32 nr_targets;
+ 
+@@ -24,7 +26,7 @@
+ 	.max_burst_length = 262144,
+ 	.first_burst_length = 65536,
+ 	.default_wait_time = 2,
+-	.default_retain_time = 20,
++	.default_retain_time = 0,
+ 	.max_outstanding_r2t = 1,
+ 	.data_pdu_inorder = 1,
+ 	.data_sequence_inorder = 1,
+@@ -48,16 +50,16 @@
+ 	int err = 0;
+ 
+ 	if (interruptible)
+-		err = down_interruptible(&target->target_sem);
++		err = mutex_lock_interruptible(&target->target_mutex);
+ 	else
+-		down(&target->target_sem);
++		mutex_lock(&target->target_mutex);
+ 
+ 	return err;
+ }
+ 
+ inline void target_unlock(struct iscsi_target *target)
+ {
+-	up(&target->target_sem);
++	mutex_unlock(&target->target_mutex);
+ }
+ 
+ static struct iscsi_target *__target_lookup_by_id(u32 id)
+@@ -86,9 +88,9 @@
+ {
+ 	struct iscsi_target *target;
+ 
+-	down(&target_list_sem);
++	mutex_lock(&target_list_mutex);
+ 	target = __target_lookup_by_id(id);
+-	up(&target_list_sem);
++	mutex_unlock(&target_list_mutex);
+ 
+ 	return target;
+ }
+@@ -157,7 +159,7 @@
+ 
+ 	strncpy(target->name, name, sizeof(target->name) - 1);
+ 
+-	init_MUTEX(&target->target_sem);
++	mutex_init(&target->target_mutex);
+ 	spin_lock_init(&target->session_list_lock);
+ 
+ 	INIT_LIST_HEAD(&target->session_list);
+@@ -195,7 +197,7 @@
+ 	u32 tid = info->tid;
+ 	int err;
+ 
+-	err = down_interruptible(&target_list_sem);
++	err = mutex_lock_interruptible(&target_list_mutex);
+ 	if (err < 0)
+ 		return err;
+ 
+@@ -204,7 +206,7 @@
+ 		goto out;
+ 	}
+ 
+-	if (__target_lookup_by_name(info->name) || 
++	if (__target_lookup_by_name(info->name) ||
+ 			(tid && __target_lookup_by_id(tid))) {
+ 		err = -EEXIST;
+ 		goto out;
+@@ -223,7 +225,7 @@
+ 	if (!err)
+ 		nr_targets++;
+ out:
+-	up(&target_list_sem);
++	mutex_unlock(&target_list_mutex);
+ 
+ 	return err;
+ }
+@@ -232,8 +234,6 @@
+ {
+ 	dprintk(D_SETUP, "%u\n", target->tid);
+ 
+-	target_thread_stop(target);
+-
+ 	while (!list_empty(&target->volumes)) {
+ 		struct iet_volume *volume;
+ 		volume = list_entry(target->volumes.next, struct iet_volume, list);
+@@ -241,6 +241,8 @@
+ 		iscsi_volume_destroy(volume);
+ 	}
+ 
++	target_thread_stop(target);
++
+ 	if (!worker_thread_pool)
+ 		kfree(target->wthread_info);
+ 	kfree(target);
+@@ -248,7 +250,7 @@
+ 	module_put(THIS_MODULE);
+ }
+ 
+-/* @locking: target_list_sem must be locked */
++/* @locking: target_list_mutex must be locked */
+ static int __target_del(struct iscsi_target *target)
+ {
+ 	int err;
+@@ -283,7 +285,7 @@
+ 	struct iscsi_target *target;
+ 	int err;
+ 
+-	err = down_interruptible(&target_list_sem);
++	err = mutex_lock_interruptible(&target_list_mutex);
+ 	if (err < 0)
+ 		return err;
+ 
+@@ -295,7 +297,7 @@
+ 
+ 	err = __target_del(target);
+ out:
+-	up(&target_list_sem);
++	mutex_unlock(&target_list_mutex);
+ 
+ 	return err;
+ }
+@@ -305,7 +307,7 @@
+ 	struct iscsi_target *target, *tmp;
+ 	int err;
+ 
+-	down(&target_list_sem);
++	mutex_lock(&target_list_mutex);
+ 
+ 	if (!list_empty(&target_list))
+ 		iprintk("Removing all connections, sessions and targets\n");
+@@ -319,7 +321,7 @@
+ 
+ 	next_target_id = 0;
+ 
+-	up(&target_list_sem);
++	mutex_unlock(&target_list_mutex);
+ }
+ 
+ static void *iet_seq_start(struct seq_file *m, loff_t *pos)
+@@ -327,7 +329,7 @@
+ 	int err;
+ 
+ 	/* are you sure this is to be interruptible? */
+-	err = down_interruptible(&target_list_sem);
++	err = mutex_lock_interruptible(&target_list_mutex);
+ 	if (err < 0)
+ 		return ERR_PTR(err);
+ 
+@@ -341,7 +343,7 @@
+ 
+ static void iet_seq_stop(struct seq_file *m, void *v)
+ {
+-	up(&target_list_sem);
++	mutex_unlock(&target_list_mutex);
+ }
+ 
+ static int iet_seq_show(struct seq_file *m, void *p)
+diff -uraN iscsitarget-1.4.20.2/kernel/target_disk.c iscsitarget-1.4.20.2-r481/kernel/target_disk.c
+--- iscsitarget-1.4.20.2/kernel/target_disk.c	2010-04-25 07:09:59.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/kernel/target_disk.c	2012-04-28 17:30:31.784275847 -0400
+@@ -247,7 +247,7 @@
+ 			data[7] = len;
+ 			if (cmnd->lun) { /* We need this ? */
+ 				memset(data + 8, 0x00, 8);
+-				memcpy(data + 8, VENDOR_ID, 
++				memcpy(data + 8, VENDOR_ID,
+ 					min_t(size_t, strlen(VENDOR_ID), 8));
+ 				memcpy(data + 16, cmnd->lun->scsi_id,
+ 								SCSI_ID_LEN);
+@@ -291,7 +291,7 @@
+ 	size = min(size & ~(8 - 1), len + 8);
+ 
+ 	assert(!tio);
+-	tio = cmnd->tio = tio_alloc(get_pgcnt(size, 0));
++	tio = cmnd->tio = tio_alloc(get_pgcnt(size));
+ 	tio_set(tio, size, 0);
+ 
+ 	data = page_address(tio->pvec[idx]);
+@@ -408,6 +408,74 @@
+ 		iscsi_cmnd_set_sense(cmnd, MEDIUM_ERROR, 0x03, 0x0);
+ }
+ 
++static void build_write_same_response(struct iscsi_cmnd *cmnd) {
++	int err;
++	struct tio *target_tio;
++	struct iet_volume *lu = cmnd->lun;
++	struct tio_iterator iter;
++	u32 MAX_IO_SIZE = 1 << 30; /* 1MByte */
++	u32 length, medium_length;
++	loff_t offset;
++	u8 *data_addr;
++	u32 data_size;
++
++	length = cmnd->tio->size;
++	medium_length = (u32)((loff_t) lu->blk_cnt << lu->blk_shift);
++	offset = cmnd->tio->offset;
++
++	data_addr = page_address(cmnd->tio->pvec[0]);
++	data_size = be32_to_cpu(cmnd_hdr(cmnd)->data_length);
++
++	/* When length = 0, it means we need to write to the end. */
++	if (length == 0) {
++		length = medium_length - offset + 1;
++		dprintk(D_VAAI,
++			"write to end, calculated length = %u\n", length);
++	}
++
++	if (length + offset > medium_length) {
++		/* Write out of boundary, Invalid Field in CDB */
++		iscsi_cmnd_set_sense(cmnd, ILLEGAL_REQUEST, 0x24, 0x0);
++		return;
++	}
++
++	list_del_init(&cmnd->list);
++
++	/* Fill target_tio with data from request, because it's all
++	   same data, we can just reuse it later with differnt offset. */
++	target_tio = tio_alloc(get_pgcnt(min_t(u32, length, MAX_IO_SIZE)));
++	tio_get(target_tio);
++
++	tio_init_iterator(target_tio, &iter);
++	while(iter.pg_idx < target_tio->pg_cnt) {
++		tio_add_data(&iter, data_addr, data_size);
++	}
++
++	while (length > 0) {
++		u32 to_write = min_t(u32, length, MAX_IO_SIZE);
++		tio_set(target_tio, to_write, offset);
++
++		/* submit to IO layer */
++		err = tio_write(lu, target_tio);
++		if (!err && !LUWCache(lu))
++			err = tio_sync(lu, target_tio);
++
++		if (err) {
++			/* Medium Error/Write Fault */
++			iscsi_cmnd_set_sense(cmnd, MEDIUM_ERROR, 0x03, 0x0);
++			break;
++		}
++
++		length -= to_write;
++		offset += to_write;
++		dprintk(D_VAAI,
++			"Committed %u bytes, %u left, offset %llu\n",
++			to_write, length, offset);
++	}
++
++	tio_put(target_tio);
++}
++
+ static void build_sync_cache_response(struct iscsi_cmnd *cmnd)
+ {
+ 	assert(cmnd->lun);
+@@ -477,11 +545,17 @@
+ 			break;
+ 		default:
+ 			ua = ua_get_first(cmnd->conn->session, cmnd->lun->lun);
+-			iscsi_cmnd_set_sense(cmnd, UNIT_ATTENTION, ua->asc,
+-					     ua->ascq);
+-			ua_free(ua);
+-			send_scsi_rsp(cmnd, build_generic_response);
+-			return 1;
++			/*
++			 * potential race: another wthread could've reported it
++			 * in the meantime
++			 */
++			if (ua) {
++				iscsi_cmnd_set_sense(cmnd, UNIT_ATTENTION, ua->asc,
++						     ua->ascq);
++				ua_free(ua);
++				send_scsi_rsp(cmnd, build_generic_response);
++				return 1;
++			}
+ 		}
+ 	}
+ 	return 0;
+@@ -492,26 +566,11 @@
+ 	struct iscsi_scsi_cmd_hdr *req = cmnd_hdr(cmnd);
+ 
+ 	int ret = is_volume_reserved(cmnd->lun,
+-				     cmnd->conn->session->sid);
++				     cmnd->conn->session->sid, req->scb);
+ 	if (ret == -EBUSY) {
+-		switch (req->scb[0]) {
+-		case INQUIRY:
+-		case RELEASE:
+-		case REPORT_LUNS:
+-		case REQUEST_SENSE:
+-		case READ_CAPACITY:
+-			/* allowed commands when reserved */
+-			break;
+-		case SERVICE_ACTION_IN:
+-			if ((cmnd_hdr(cmnd)->scb[1] & 0x1F) == 0x10)
+-				break;
+-			/* fall through */
+-		default:
+-			/* return reservation conflict for all others */
+-			send_scsi_rsp(cmnd,
+-				      build_reservation_conflict_response);
+-			return 1;
+-		}
++		send_scsi_rsp(cmnd,
++			      build_reservation_conflict_response);
++		return 1;
+ 	}
+ 
+ 	return 0;
+@@ -559,6 +618,9 @@
+ 	case WRITE_VERIFY:
+ 		send_scsi_rsp(cmnd, build_write_response);
+ 		break;
++	case WRITE_SAME_16:
++		send_scsi_rsp(cmnd, build_write_same_response);
++		break;
+ 	case SYNCHRONIZE_CACHE:
+ 		send_scsi_rsp(cmnd, build_sync_cache_response);
+ 		break;
+@@ -574,6 +636,12 @@
+ 	case VERIFY_16:
+ 		send_scsi_rsp(cmnd, build_generic_response);
+ 		break;
++	case PERSISTENT_RESERVE_IN:
++		send_data_rsp(cmnd, build_persistent_reserve_in_response);
++		break;
++	case PERSISTENT_RESERVE_OUT:
++		send_scsi_rsp(cmnd, build_persistent_reserve_out_response);
++		break;
+ 	default:
+ 		eprintk("%s\n", "we should not come here!");
+ 		break;
+diff -uraN iscsitarget-1.4.20.2/kernel/tio.c iscsitarget-1.4.20.2-r481/kernel/tio.c
+--- iscsitarget-1.4.20.2/kernel/tio.c	2007-09-20 19:26:20.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/kernel/tio.c	2012-04-28 17:30:31.788275803 -0400
+@@ -44,7 +44,6 @@
+ 	tio = kmem_cache_alloc(tio_cache, GFP_KERNEL | __GFP_NOFAIL);
+ 
+ 	tio->pg_cnt = 0;
+-	tio->idx = 0;
+ 	tio->offset = 0;
+ 	tio->size = 0;
+ 	tio->pvec = NULL;
+@@ -57,6 +56,43 @@
+ 	return tio;
+ }
+ 
++void
++tio_init_iterator(struct tio *tio,
++		  struct tio_iterator *iter)
++{
++	iter->tio = tio;
++	iter->size = 0;
++	iter->pg_idx = 0;
++	iter->pg_off = 0;
++}
++
++size_t
++tio_add_data(struct tio_iterator *iter,
++	     const u8 *data,
++	     size_t len)
++{
++	struct tio *tio = iter->tio;
++	const size_t to_copy = min(tio->pg_cnt * PAGE_SIZE - iter->size, len);
++	size_t residual = to_copy;
++
++	BUG_ON(tio->size < iter->size);
++
++	do {
++		u8 *ptr = page_address(iter->tio->pvec[iter->pg_idx]) + iter->pg_off;
++		size_t chunk = min(PAGE_SIZE - iter->pg_off, residual);
++		memcpy(ptr, data, chunk);
++		residual -= chunk;
++		if (residual ||
++		    iter->pg_off + chunk == PAGE_SIZE) {
++			++iter->pg_idx;
++			iter->pg_off = 0;
++		} else
++			iter->pg_off += chunk;
++	} while (residual);
++
++	return to_copy;
++}
++
+ static void tio_free(struct tio *tio)
+ {
+ 	int i;
+@@ -82,8 +118,7 @@
+ 
+ void tio_set(struct tio *tio, u32 size, loff_t offset)
+ {
+-	tio->idx = offset >> PAGE_CACHE_SHIFT;
+-	tio->offset = offset & ~PAGE_CACHE_MASK;
++	tio->offset = offset;
+ 	tio->size = size;
+ }
+ 
+@@ -91,6 +126,8 @@
+ {
+ 	struct iotype *iot = lu->iotype;
+ 	assert(iot);
++	if (!tio->size)
++		return 0;
+ 	return iot->make_request ? iot->make_request(lu, tio, READ) : 0;
+ }
+ 
+@@ -98,6 +135,8 @@
+ {
+ 	struct iotype *iot = lu->iotype;
+ 	assert(iot);
++	if (!tio->size)
++		return 0;
+ 	return iot->make_request ? iot->make_request(lu, tio, WRITE) : 0;
+ }
+ 
+diff -uraN iscsitarget-1.4.20.2/kernel/ua.c iscsitarget-1.4.20.2-r481/kernel/ua.c
+--- iscsitarget-1.4.20.2/kernel/ua.c	2010-06-29 18:00:23.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/kernel/ua.c	2012-04-28 17:30:31.784275847 -0400
+@@ -126,8 +126,8 @@
+ 	/* One UA per occurrence of an event */
+ 	list_for_each_entry(e, l, entry) {
+ 		if (e->session == sess && e->lun == lun &&
+-				e->asc == asc && e->ascq == ascq &&
+-				e->session->exp_cmd_sn == sess->exp_cmd_sn) {
++		    e->asc == asc && e->ascq == ascq &&
++		    e->session->exp_cmd_sn == sess->exp_cmd_sn) {
+ 			spin_unlock(&sess->ua_hash_lock);
+ 			ua_free(ua);
+ 			return;
+diff -uraN iscsitarget-1.4.20.2/kernel/volume.c iscsitarget-1.4.20.2-r481/kernel/volume.c
+--- iscsitarget-1.4.20.2/kernel/volume.c	2010-06-29 18:02:26.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/kernel/volume.c	2012-04-28 17:30:31.785275836 -0400
+@@ -6,6 +6,8 @@
+ 
+ #include <linux/types.h>
+ #include <linux/parser.h>
++#include <linux/blkdev.h>
++#include <scsi/scsi.h>
+ 
+ #include "iscsi.h"
+ #include "iscsi_dbg.h"
+@@ -87,7 +89,7 @@
+ 	hash.tfm = crypto_alloc_hash("md5", 0, CRYPTO_ALG_ASYNC);
+ 	hash.flags = 0;
+ 
+-	if (hash.tfm) {
++	if (!IS_ERR(hash.tfm)) {
+ 		struct scatterlist sg[2];
+ 		unsigned int nbytes = 0;
+ 
+@@ -111,8 +113,7 @@
+ 						sizeof(volume->target->tid));
+ 		memcpy(volume->scsi_id + sizeof(volume->target->tid),
+ 					&volume->lun, sizeof(volume->lun));
+-	}	
+-
++	}
+ }
+ 
+ static int parse_volume_params(struct iet_volume *volume, char *params)
+@@ -120,11 +121,13 @@
+ 	int err = 0;
+ 	unsigned blk_sz;
+ 	substring_t args[MAX_OPT_ARGS];
+-	char *p, *argp = NULL, *buf = (char *) get_zeroed_page(GFP_USER);
++	char *p, *argp = NULL, *bp, *buf = (char *) get_zeroed_page(GFP_USER);
+ 
+ 	if (!buf)
+ 		return -ENOMEM;
+ 
++	bp = buf;
++
+ 	strncpy(buf, params, PAGE_CACHE_SIZE);
+ 
+ 	while ((p = strsep(&buf, ",")) != NULL) {
+@@ -203,11 +206,25 @@
+ 		err = -EINVAL;
+ 	}
+ 
+-	free_page((unsigned long) buf);
++	free_page((unsigned long) bp);
+ 
+ 	return err;
+ }
+ 
++static void
++volume_reservation_exit(struct iet_volume *volume)
++{
++	struct list_head *l, *n;
++	struct registration *tmp;
++	struct reservation *reservation = &volume->reservation;
++
++	list_for_each_safe(l, n, &reservation->registration_list) {
++		tmp = list_entry(l, struct registration, r_list);
++		list_del(l);
++		kfree(tmp);
++	}
++}
++
+ int volume_add(struct iscsi_target *target, struct volume_info *info)
+ {
+ 	int ret;
+@@ -227,6 +244,7 @@
+ 
+ 	volume->target = target;
+ 	volume->lun = info->lun;
++	INIT_LIST_HEAD(&volume->reservation.registration_list);
+ 
+ 	args = kzalloc(info->args_len + 1, GFP_KERNEL);
+ 	if (!args) {
+@@ -290,6 +308,7 @@
+ 	volume->iotype->detach(volume);
+ 	put_iotype(volume->iotype);
+ 	list_del(&volume->list);
++	volume_reservation_exit(volume);
+ 	kfree(volume);
+ }
+ 
+@@ -331,33 +350,131 @@
+ int volume_reserve(struct iet_volume *volume, u64 sid)
+ {
+ 	int err = 0;
++	struct reservation *reservation;
+ 
+ 	if (!volume)
+ 		return -ENOENT;
+ 
++	reservation = &volume->reservation;
+ 	spin_lock(&volume->reserve_lock);
+-	if (volume->reserve_sid && volume->reserve_sid != sid)
++	if (pr_is_reserved(reservation) && reservation->sid != sid)
+ 		err = -EBUSY;
+-	else
+-		volume->reserve_sid = sid;
++	else {
++		reservation->reservation_type = RESERVATION_TYPE_RESERVE;
++		reservation->sid = sid;
++	}
+ 
+ 	spin_unlock(&volume->reserve_lock);
+ 	return err;
+ }
+ 
+-int is_volume_reserved(struct iet_volume *volume, u64 sid)
++int is_volume_reserved(struct iet_volume *volume, u64 sid, u8 *scb)
+ {
+ 	int err = 0;
++	struct reservation *reservation;
++	bool registered = false;
++	bool write_excl = false;
++	bool excl_access = false;
++	bool write_excl_ro = false;
++	bool excl_access_ro = false;
+ 
+ 	if (!volume)
+ 		return -ENOENT;
+ 
++	reservation = &volume->reservation;
++
+ 	spin_lock(&volume->reserve_lock);
+-	if (!volume->reserve_sid || volume->reserve_sid == sid)
+-		err = 0;
+-	else
+-		err = -EBUSY;
++	if (!pr_is_reserved(reservation) || reservation->sid == sid) {
++		spin_unlock(&volume->reserve_lock);
++		return 0;
++	}
++
++	if (reservation->reservation_type == RESERVATION_TYPE_RESERVE) {
++		switch (scb[0]) {
++		case INQUIRY:
++		case RELEASE:
++		case REPORT_LUNS:
++		case REQUEST_SENSE:
++		case READ_CAPACITY:
++			/* allowed commands when reserved */
++			break;
++		case SERVICE_ACTION_IN:
++			if ((scb[1] & 0x1F) == 0x10)
++				break;
++			/* fall through */
++		default:
++			err = -EBUSY;
++			break;
++		}
++		spin_unlock(&volume->reserve_lock);
++		return err;
++	}
++
++	registered = pr_initiator_has_registered(reservation, sid);
+ 
++	switch (reservation->persistent_type) {
++	case PR_TYPE_WRITE_EXCLUSIVE:
++		write_excl = true;
++		break;
++	case PR_TYPE_EXCLUSIVE_ACCESS:
++		excl_access = true;
++		break;
++	case PR_TYPE_WRITE_EXCLUSIVE_REGISTRANTS_ONLY:
++	case PR_TYPE_WRITE_EXCLUSIVE_ALL_REGISTRANTS:
++		write_excl_ro = true;
++		break;
++	case PR_TYPE_EXCLUSIVE_ACCESS_REGISTRANTS_ONLY:
++	case PR_TYPE_EXCLUSIVE_ACCESS_ALL_REGISTRANTS:
++		excl_access_ro = true;
++		break;
++	default:
++		break;
++	}
++
++	switch (scb[0]) {
++	case INQUIRY:
++	case TEST_UNIT_READY:
++	case PERSISTENT_RESERVE_IN:
++	case PERSISTENT_RESERVE_OUT:
++	case REPORT_LUNS:
++	case REQUEST_SENSE:
++	case READ_CAPACITY:
++	case START_STOP:
++		break;
++	case MODE_SENSE:
++	case WRITE_6:
++	case WRITE_10:
++	case WRITE_12:
++	case WRITE_16:
++	case WRITE_SAME_16:
++	case WRITE_VERIFY:
++	case SYNCHRONIZE_CACHE:
++		if (write_excl || excl_access)
++			err = -EBUSY;
++		if ((write_excl_ro || excl_access_ro) && !registered)
++			err = -EBUSY;
++		break;
++	case READ_6:
++	case READ_10:
++	case READ_12:
++	case READ_16:
++	case VERIFY:
++	case VERIFY_16:
++		if (excl_access)
++			err = -EBUSY;
++		if (excl_access_ro && !registered)
++			err = -EBUSY;
++		break;
++	case SERVICE_ACTION_IN:
++		if ((scb[1] & 0x1F) == 0x10)
++			break;
++		/* fall through */
++	case RELEASE:
++	case RESERVE:
++	default:
++		err = -EBUSY;
++		break;
++	}
+ 	spin_unlock(&volume->reserve_lock);
+ 	return err;
+ }
+@@ -365,16 +482,21 @@
+ int volume_release(struct iet_volume *volume, u64 sid, int force)
+ {
+ 	int err = 0;
++	struct reservation *reservation;
+ 
+ 	if (!volume)
+ 		return -ENOENT;
+ 
++	reservation = &volume->reservation;
+ 	spin_lock(&volume->reserve_lock);
+ 
+-	if (force || volume->reserve_sid == sid)
+-		volume->reserve_sid = 0;
+-	else
++	if (reservation->reservation_type == RESERVATION_TYPE_RESERVE &&
++	    (force || reservation->sid == sid)) {
++		reservation->reservation_type = RESERVATION_TYPE_NONE;
++		reservation->sid = 0;
++	} else {
+ 		err = -EBUSY;
++	}
+ 
+ 	spin_unlock(&volume->reserve_lock);
+ 	return err;
+diff -uraN iscsitarget-1.4.20.2/kernel/wthread.c iscsitarget-1.4.20.2-r481/kernel/wthread.c
+--- iscsitarget-1.4.20.2/kernel/wthread.c	2010-04-11 11:34:14.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/kernel/wthread.c	2012-04-28 17:30:31.783275858 -0400
+@@ -67,14 +67,11 @@
+ 	struct iscsi_conn *conn;
+ 	DECLARE_WAITQUEUE(wait, current);
+ 
+-	get_io_context(GFP_KERNEL, -1);
++	if (current->io_context)
++		put_io_context(current->io_context);
+ 
+-	if (!current->io_context)
+-		eprintk("%s\n", "Failed to get IO context");
+-	else if (info->wthread_ioc)
+-		copy_io_context(&current->io_context, &info->wthread_ioc);
+-	else
+-		info->wthread_ioc = current->io_context;
++	if (!(current->io_context = ioc_task_link(info->wthread_ioc)))
++		info->wthread_ioc = get_task_io_context(current, GFP_KERNEL, -1);
+ 
+ 	add_wait_queue(&info->wthread_sleep, &wait);
+ 
+@@ -100,16 +97,6 @@
+ 
+ 	remove_wait_queue(&info->wthread_sleep, &wait);
+ 
+-	if (current->io_context) {
+-		struct io_context *ioc = current->io_context;
+-
+-		task_lock(current);
+-		current->io_context = NULL;
+-		task_unlock(current);
+-
+-		put_io_context(ioc);
+-	}
+-
+ 	return 0;
+ }
+ 
+diff -uraN iscsitarget-1.4.20.2/patches/compat-2.6.14-2.6.18.patch iscsitarget-1.4.20.2-r481/patches/compat-2.6.14-2.6.18.patch
+--- iscsitarget-1.4.20.2/patches/compat-2.6.14-2.6.18.patch	2010-06-29 18:02:26.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/patches/compat-2.6.14-2.6.18.patch	2012-04-28 17:30:32.217271002 -0400
+@@ -2,7 +2,7 @@
+ ===================================================================
+ --- 1/kernel/iscsi.h	(revision 105)
+ +++ 2/kernel/iscsi.h	(working copy)
+-@@ -261,8 +261,8 @@ struct iscsi_conn {
++@@ -260,8 +260,8 @@ struct iscsi_conn {
+  	u32 write_offset;
+  	int write_state;
+  
+@@ -199,17 +199,6 @@
+  
+  struct tio *tio_alloc(int count)
+  {
+---- context/kernel/wthread.c	2010-01-25 11:27:57.000000000 -0500
+-+++ context/kernel/wthread.c.18	2010-01-25 11:25:43.000000000 -0500
+-@@ -67,7 +67,7 @@
+- 	struct iscsi_conn *conn;
+- 	DECLARE_WAITQUEUE(wait, current);
+- 
+--	get_io_context(GFP_KERNEL, -1);
+-+	get_io_context(GFP_KERNEL);
+- 
+- 	if (!current->io_context)
+- 		eprintk("%s\n", "Failed to get IO context");
+ --- param/kernel/volume.c	2010-04-08 18:05:38.000000000 -0400
+ +++ param/kernel/volume.c.18	2010-04-08 18:05:38.000000000 -0400
+ @@ -84,28 +84,26 @@ static int set_scsisn(struct iet_volume 
+@@ -223,7 +212,7 @@
+ -	hash.flags = 0;
+ +	tfm = crypto_alloc_tfm("md5", 0);
+  
+--	if (hash.tfm) {
++-	if (!IS_ERR(hash.tfm)) {
+ +	if (tfm) {
+  		struct scatterlist sg[2];
+ -		unsigned int nbytes = 0;
+@@ -250,3 +239,14 @@
+  	} else {
+  		/* If no MD5 available set ID to TID and LUN */
+  		memcpy(volume->scsi_id, &volume->target->tid,
++--- ioc/kernel/wthread.c	2011-04-12 19:50:49.000000000 -0400
+++++ ioc/kernel/wthread.c	2011-04-12 19:51:29.000000000 -0400
++@@ -68,7 +68,7 @@ static int worker_thread(void *arg)
++ 	DECLARE_WAITQUEUE(wait, current);
++ 
++ 	if (!current->io_context)
++-		get_io_context(GFP_KERNEL, -1);
+++		get_io_context(GFP_KERNEL);
++ 
++ 	add_wait_queue(&info->wthread_sleep, &wait);
++ 
+diff -uraN iscsitarget-1.4.20.2/patches/compat-2.6.19-2.6.21.patch iscsitarget-1.4.20.2-r481/patches/compat-2.6.19-2.6.21.patch
+--- iscsitarget-1.4.20.2/patches/compat-2.6.19-2.6.21.patch	2010-04-13 13:13:44.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/patches/compat-2.6.19-2.6.21.patch	2012-04-28 17:30:32.217271002 -0400
+@@ -16,7 +16,7 @@
+ ===================================================================
+ --- 1/kernel/iscsi.c	(working copy)
+ +++ 2/kernel/iscsi.c	(revision 137)
+-@@ -1925,7 +1925,8 @@ static int iscsi_init(void)
++@@ -1942,7 +1942,8 @@ static int iscsi_init(void)
+  	if ((err = event_init()) < 0)
+  		goto err;
+ 
+@@ -30,7 +30,7 @@
+ ===================================================================
+ --- 1/kernel/tio.c	(working copy)
+ +++ 2/kernel/tio.c	(revision 137)
+-@@ -110,7 +110,8 @@ int tio_sync(struct iet_volume *lu, stru
++@@ -114,7 +114,8 @@ int tio_sync(struct iet_volume *lu, stru
+ 
+  int tio_init(void)
+  {
+diff -uraN iscsitarget-1.4.20.2/patches/compat-2.6.22.patch iscsitarget-1.4.20.2-r481/patches/compat-2.6.22.patch
+--- iscsitarget-1.4.20.2/patches/compat-2.6.22.patch	2010-04-08 18:25:37.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/patches/compat-2.6.22.patch	2012-04-28 17:30:32.218270991 -0400
+@@ -53,7 +53,7 @@
+ ===================================================================
+ --- a/kernel/target.c	(revision 205)
+ +++ b/kernel/target.c	(working copy)
+-@@ -7,6 +7,7 @@
++@@ -9,6 +9,7 @@
+  #include "iscsi.h"
+  #include "digest.h"
+  #include "iscsi_dbg.h"
+diff -uraN iscsitarget-1.4.20.2/patches/compat-2.6.24.patch iscsitarget-1.4.20.2-r481/patches/compat-2.6.24.patch
+--- iscsitarget-1.4.20.2/patches/compat-2.6.24.patch	2009-01-24 08:08:41.000000000 -0500
++++ iscsitarget-1.4.20.2-r481/patches/compat-2.6.24.patch	2012-04-28 17:30:32.219270980 -0400
+@@ -10,3 +10,38 @@
+ +	if (nl)
+ +		sock_release(nl->sk_socket);
+  }
++--- ioc/kernel/iscsi.h	2011-04-12 17:31:46.000000000 -0400
+++++ ioc/kernel/iscsi.h	2011-04-12 17:46:06.000000000 -0400
++@@ -94,8 +94,6 @@ struct worker_thread_info {
++ 	struct list_head work_queue;
++ 
++ 	wait_queue_head_t wthread_sleep;
++-
++-	struct io_context *wthread_ioc;
++ };
++ 
++ struct iscsi_cmnd;
++--- ioc/kernel/wthread.c	2011-04-12 19:49:26.000000000 -0400
+++++ ioc/kernel/wthread.c	2011-04-12 19:50:49.000000000 -0400
++@@ -67,11 +67,8 @@ static int worker_thread(void *arg)
++ 	struct iscsi_conn *conn;
++ 	DECLARE_WAITQUEUE(wait, current);
++ 
++-	if (current->io_context)
++-		put_io_context(current->io_context);
++-
++-	if (!(current->io_context = ioc_task_link(info->wthread_ioc)))
++-		info->wthread_ioc = get_io_context(GFP_KERNEL, -1);
+++	if (!current->io_context)
+++		get_io_context(GFP_KERNEL, -1);
++ 
++ 	add_wait_queue(&info->wthread_sleep, &wait);
++ 
++@@ -147,7 +144,6 @@ int wthread_init(struct worker_thread_in
++ 	spin_lock_init(&info->wthread_lock);
++ 
++ 	info->nr_running_wthreads = 0;
++-	info->wthread_ioc = NULL;
++ 
++ 	INIT_LIST_HEAD(&info->work_queue);
++ 	INIT_LIST_HEAD(&info->wthread_list);
+diff -uraN iscsitarget-1.4.20.2/patches/compat-2.6.30.patch iscsitarget-1.4.20.2-r481/patches/compat-2.6.30.patch
+--- iscsitarget-1.4.20.2/patches/compat-2.6.30.patch	2010-04-08 18:25:37.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/patches/compat-2.6.30.patch	2012-04-28 17:30:32.218270991 -0400
+@@ -7,5 +7,5 @@
+ -		unsigned bsz = bdev_logical_block_size(bio_data->bdev);
+ +		unsigned bsz = bdev_hardsect_size(bio_data->bdev);
+  		if (!volume->blk_shift)
+- 			volume->blk_shift = ilog2(bsz);
+- 		else if (volume->blk_shift < ilog2(bsz)) {
++ 			volume->blk_shift = blksize_bits(bsz);
++ 		else if (volume->blk_shift < blksize_bits(bsz)) {
+diff -uraN iscsitarget-1.4.20.2/patches/compat-2.6.33-2.6.35.patch iscsitarget-1.4.20.2-r481/patches/compat-2.6.33-2.6.35.patch
+--- iscsitarget-1.4.20.2/patches/compat-2.6.33-2.6.35.patch	1969-12-31 19:00:00.000000000 -0500
++++ iscsitarget-1.4.20.2-r481/patches/compat-2.6.33-2.6.35.patch	2012-04-28 17:30:32.217271002 -0400
+@@ -0,0 +1,13 @@
++diff --git b/kernel/conn.c a/kernel/conn.c
++index c7b8ea1..ec6dada 100644
++--- b/kernel/conn.c
+++++ a/kernel/conn.c
++@@ -44,7 +44,7 @@ void conn_info_show(struct seq_file *seq, struct iscsi_session *session)
++ 		switch (sk->sk_family) {
++ 		case AF_INET:
++ 			snprintf(buf, sizeof(buf),
++-				 "%pI4", &inet_sk(sk)->inet_daddr);
+++				 "%u.%u.%u.%u", NIPQUAD(inet_sk(sk)->inet_daddr));
++ 			break;
++ 		case AF_INET6:
++ 			snprintf(buf, sizeof(buf), "[%pI6]",
+diff -uraN iscsitarget-1.4.20.2/patches/compat-2.6.36-2.6.37.patch iscsitarget-1.4.20.2-r481/patches/compat-2.6.36-2.6.37.patch
+--- iscsitarget-1.4.20.2/patches/compat-2.6.36-2.6.37.patch	1969-12-31 19:00:00.000000000 -0500
++++ iscsitarget-1.4.20.2-r481/patches/compat-2.6.36-2.6.37.patch	2012-04-28 17:30:32.219270980 -0400
+@@ -0,0 +1,34 @@
++diff --git b/kernel/block-io.c a/kernel/block-io.c
++index 4c6d8bd..c812abf 100644
++--- b/kernel/block-io.c
+++++ a/kernel/block-io.c
++@@ -155,14 +155,14 @@ blockio_open_path(struct iet_volume *volume, const char *path)
++ {
++ 	struct blockio_data *bio_data = volume->private;
++ 	struct block_device *bdev;
++-	int flags = FMODE_EXCL | FMODE_READ | (LUReadonly(volume) ? 0 : FMODE_WRITE);
+++	int flags = FMODE_READ | (LUReadonly(volume) ? 0 : FMODE_WRITE);
++ 	int err = 0;
++ 
++ 	bio_data->path = kstrdup(path, GFP_KERNEL);
++ 	if (!bio_data->path)
++ 		return -ENOMEM;
++ 
++-	bdev = blkdev_get_by_path(path, flags, THIS_MODULE);
+++	bdev = open_bdev_exclusive(path, flags, THIS_MODULE);
++ 	if (IS_ERR(bdev)) {
++ 		err = PTR_ERR(bdev);
++ 		eprintk("Can't open device %s, error %d\n", path, err);
++@@ -250,10 +250,10 @@ static void
++ blockio_detach(struct iet_volume *volume)
++ {
++ 	struct blockio_data *bio_data = volume->private;
++-	int flags = FMODE_EXCL | FMODE_READ | (LUReadonly(volume) ? 0 : FMODE_WRITE);
+++	int flags = FMODE_READ | (LUReadonly(volume) ? 0 : FMODE_WRITE);
++ 
++ 	if (bio_data->bdev)
++-		blkdev_put(bio_data->bdev, flags);
+++		close_bdev_exclusive(bio_data->bdev, flags);
++ 	kfree(bio_data->path);
++ 
++ 	kfree(volume->private);
+diff -uraN iscsitarget-1.4.20.2/patches/compat-2.6.38.patch iscsitarget-1.4.20.2-r481/patches/compat-2.6.38.patch
+--- iscsitarget-1.4.20.2/patches/compat-2.6.38.patch	1969-12-31 19:00:00.000000000 -0500
++++ iscsitarget-1.4.20.2-r481/patches/compat-2.6.38.patch	2012-04-28 17:30:32.220270969 -0400
+@@ -0,0 +1,44 @@
++diff --git b/kernel/block-io.c a/kernel/block-io.c
++index e24f1ca..4c6d8bd 100644
++--- b/kernel/block-io.c
+++++ a/kernel/block-io.c
++@@ -56,7 +56,6 @@ blockio_make_request(struct iet_volume *volume, struct tio *tio, int rw)
++ 	struct request_queue *bdev_q = bdev_get_queue(bio_data->bdev);
++ 	struct tio_work *tio_work;
++ 	struct bio *tio_bio = NULL, *bio = NULL, *biotail = NULL;
++-	struct blk_plug plug;
++ 
++ 	u32 offset = tio->offset;
++ 	u32 size = tio->size;
++@@ -119,8 +118,6 @@ blockio_make_request(struct iet_volume *volume, struct tio *tio, int rw)
++ 		}
++ 	}
++ 
++-	blk_start_plug(&plug);
++-
++ 	/* Walk the list, submitting bios 1 by 1 */
++ 	while (tio_bio) {
++ 		bio = tio_bio;
++@@ -130,7 +127,8 @@ blockio_make_request(struct iet_volume *volume, struct tio *tio, int rw)
++ 		submit_bio(rw, bio);
++ 	}
++ 
++-	blk_finish_plug(&plug);
+++	if (bdev_q && bdev_q->unplug_fn)
+++		bdev_q->unplug_fn(bdev_q);
++ 
++ 	wait_for_completion(&tio_work->tio_complete);
++ 
++diff --git b/kernel/iotype.c a/kernel/iotype.c
++index 9fd69fa..b3d6117 100644
++--- b/kernel/iotype.c
+++++ a/kernel/iotype.c
++@@ -9,7 +9,7 @@
++ #include "iscsi_dbg.h"
++ 
++ static LIST_HEAD(iotypes);
++-static DEFINE_RWLOCK(iotypes_lock);
+++static rwlock_t iotypes_lock = RW_LOCK_UNLOCKED;
++ 
++ static struct iotype *find_iotype(const char *name)
++ {
+diff -uraN iscsitarget-1.4.20.2/patches/compat-2.6.39-3.2.patch iscsitarget-1.4.20.2-r481/patches/compat-2.6.39-3.2.patch
+--- iscsitarget-1.4.20.2/patches/compat-2.6.39-3.2.patch	1969-12-31 19:00:00.000000000 -0500
++++ iscsitarget-1.4.20.2-r481/patches/compat-2.6.39-3.2.patch	2012-04-28 17:30:32.220270969 -0400
+@@ -0,0 +1,13 @@
++diff --git b/kernel/wthread.c a/kernel/wthread.c
++index 940de9d..f7c8b1d 100644
++--- b/kernel/wthread.c
+++++ a/kernel/wthread.c
++@@ -71,7 +71,7 @@ static int worker_thread(void *arg)
++ 		put_io_context(current->io_context);
++ 
++ 	if (!(current->io_context = ioc_task_link(info->wthread_ioc)))
++-		info->wthread_ioc = get_task_io_context(current, GFP_KERNEL, -1);
+++		info->wthread_ioc = get_io_context(GFP_KERNEL, -1);
++ 
++ 	add_wait_queue(&info->wthread_sleep, &wait);
++ 
+diff -uraN iscsitarget-1.4.20.2/usr/Makefile iscsitarget-1.4.20.2-r481/usr/Makefile
+--- iscsitarget-1.4.20.2/usr/Makefile	2010-04-13 10:53:30.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/usr/Makefile	2012-04-28 17:30:33.148260580 -0400
+@@ -1,4 +1,4 @@
+-CFLAGS += -O2 -fno-inline -Wall -Wstrict-prototypes -g -I../include
++CFLAGS += -O2 -fno-inline -Wall -Wstrict-prototypes -I../include
+ CFLAGS += -D_GNU_SOURCE # required for glibc >= 2.8
+ PROGRAMS = ietd ietadm
+ LIBS =
+@@ -7,10 +7,10 @@
+ 
+ ietd: ietd.o iscsid.o conn.o session.o target.o message.o ctldev.o log.o chap.o event.o param.o plain.o isns.o md5.o sha1.o
+ 
+-	$(CC) $^ -o $@ $(LIBS)
++	$(CC) $(LDFLAGS) $^ -o $@ $(LIBS)
+ 
+ ietadm: ietadm.o param.o
+-	$(CC) $^ -o $@
++	$(CC) $(LDFLAGS) $^ -o $@
+ 
+ clean:
+ 	rm -f *.o $(PROGRAMS)
+diff -uraN iscsitarget-1.4.20.2/usr/config.h iscsitarget-1.4.20.2-r481/usr/config.h
+--- iscsitarget-1.4.20.2/usr/config.h	2010-03-08 12:15:53.000000000 -0500
++++ iscsitarget-1.4.20.2-r481/usr/config.h	2012-04-28 17:30:33.145260613 -0400
+@@ -29,7 +29,7 @@
+ #define CONFIG_H
+ 
+ struct config_operations {
+-	void (*init) (char *, char **, int *);
++	void (*init) (char *params, int *timeout);
+ 	int (*target_add) (u32 *, char *);
+ 	int (*target_stop) (u32);
+ 	int (*target_del) (u32);
+diff -uraN iscsitarget-1.4.20.2/usr/conn.c iscsitarget-1.4.20.2-r481/usr/conn.c
+--- iscsitarget-1.4.20.2/usr/conn.c	2010-02-02 14:08:04.000000000 -0500
++++ iscsitarget-1.4.20.2-r481/usr/conn.c	2012-04-28 17:30:33.149260569 -0400
+@@ -51,7 +51,7 @@
+ 			      conn->session_param[key_data_digest].val);
+ 	if (!err)
+ 		conn->session->conn_cnt++;
+-	else if (err < 0 && err != -EEXIST)
++	else
+ 		log_error("unable to create connection %u for session %#" PRIx64 " in target %u: %d",
+ 			conn->cid, conn->session->sid.id64, conn->tid, errno);
+ 
+diff -uraN iscsitarget-1.4.20.2/usr/event.c iscsitarget-1.4.20.2-r481/usr/event.c
+--- iscsitarget-1.4.20.2/usr/event.c	2010-06-29 17:59:28.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/usr/event.c	2012-04-28 17:30:33.146260602 -0400
+@@ -87,10 +87,9 @@
+ 
+ 	switch (event.state) {
+ 	case E_CONN_CLOSE:
+-		if (!(session = session_find_id(event.tid, event.sid))) {
+-			log_warning("session %llu not found?", event.sid);
+-			goto retry;
+-		}
++		if (!(session = session_find_id(event.tid, event.sid)))
++			/* session previously closed for reinstatement? */
++			break;
+ 
+ 		if (--session->conn_cnt <= 0)
+ 			session_remove(session);
+diff -uraN iscsitarget-1.4.20.2/usr/ietd.c iscsitarget-1.4.20.2-r481/usr/ietd.c
+--- iscsitarget-1.4.20.2/usr/ietd.c	2010-06-30 13:33:57.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/usr/ietd.c	2012-04-28 17:30:33.148260580 -0400
+@@ -426,6 +426,8 @@
+ 				pollfd->fd = -1;
+ 				incoming[i] = NULL;
+ 				incoming_cnt--;
++				if ((poll_array[POLL_LISTEN].events == 0) && (incoming_cnt < INCOMING_MAX))
++					poll_array[POLL_LISTEN].events = POLLIN;
+ 				if (session && session->conn_cnt <= 0)
+ 					session_remove(session);
+ 			}
+@@ -439,8 +441,7 @@
+ 	char *config = NULL, pid_buf[64];
+ 	uid_t uid = 0;
+ 	gid_t gid = 0;
+-	char *isns = NULL;
+-	int isns_ac = 0, pid_fd;
++	int pid_fd;
+ 
+ 	/* otherwise we would die in some later write() during the event_loop
+ 	 * instead of getting EPIPE! */
+@@ -549,10 +550,6 @@
+ 		exit(-1);
+ 	}
+ 
+-	cops->init(config, &isns, &isns_ac);
+-	if (isns)
+-		timeout = isns_init(isns, isns_ac);
+-
+ 	if (gid && setgid(gid) < 0) {
+ 		log_error("unable to setgid: %m");
+ 		exit(-1);
+@@ -563,6 +560,8 @@
+ 		exit(-1);
+ 	}
+ 
++	cops->init(config, &timeout);
++
+ 	event_loop(timeout);
+ 
+ 	return 0;
+diff -uraN iscsitarget-1.4.20.2/usr/iscsid.c iscsitarget-1.4.20.2-r481/usr/iscsid.c
+--- iscsitarget-1.4.20.2/usr/iscsid.c	2010-07-06 16:55:36.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/usr/iscsid.c	2012-04-28 17:30:33.146260602 -0400
+@@ -273,43 +273,6 @@
+ 		login_rsp_ini_err(conn, ISCSI_STATUS_AUTH_FAILED);
+ }
+ 
+-static void login_security_done(struct connection *conn)
+-{
+-	struct iscsi_login_req_hdr *req =
+-				(struct iscsi_login_req_hdr *)&conn->req.bhs;
+-	struct session *session;
+-
+-	if (!conn->tid)
+-		return;
+-
+-	if ((session = session_find_name(conn->tid, conn->initiator, req->sid))) {
+-		if (!req->sid.id.tsih) {
+-			/* do session reinstatement */
+-			log_debug(1, "session %#" PRIx64 " reinstated",
+-								req->sid.id64);
+-			if (session_remove(session))
+-				login_rsp_tgt_err(conn, ISCSI_STATUS_TARGET_ERROR);
+-			return;
+-		} else if (req->sid.id.tsih != session->sid.id.tsih) {
+-			/* fail the login */
+-			login_rsp_ini_err(conn, ISCSI_STATUS_SESSION_NOT_FOUND);
+-			return;
+-		}
+-		/* add connection to existing session */
+-		/* reinstatement handled in kernel */
+-		log_debug(1, "connection %u added to session %#" PRIx64,
+-						conn->cid, req->sid.id64);
+-		conn->session = session;
+-	} else {
+-		if (req->sid.id.tsih) {
+-			/* fail the login */
+-			login_rsp_ini_err(conn, ISCSI_STATUS_SESSION_NOT_FOUND);
+-			return;
+-		}
+-		/* instantiate a new session */
+-	}
+-}
+-
+ static void text_scan_login(struct connection *conn)
+ {
+ 	char *key, *value, *data;
+@@ -345,7 +308,7 @@
+ 			}
+ 
+ 			err = param_check_val(session_keys, idx, &val);
+-			err = param_set_val(session_keys, conn->session_param, idx, &val);
++			param_set_val(session_keys, conn->session_param, idx, &val);
+ 
+ 			switch (conn->session_param[idx].state) {
+ 			case KEY_STATE_START:
+@@ -423,7 +386,7 @@
+ 	struct iscsi_login_req_hdr *req =
+ 				(struct iscsi_login_req_hdr *)&conn->req.bhs;
+ 
+-	char *name, *alias, *session_type, *target_name;
++	char *name, *session_type, *target_name;
+ 	struct sockaddr_storage ss;
+ 	socklen_t slen = sizeof(struct sockaddr_storage);
+ 
+@@ -442,7 +405,6 @@
+ 		return;
+ 	}
+ 	conn->initiator = strdup(name);
+-	alias = text_key_find(conn, "InitiatorAlias");
+ 	session_type = text_key_find(conn, "SessionType");
+ 	target_name = text_key_find(conn, "TargetName");
+ 
+@@ -510,14 +472,43 @@
+ 
+ static void login_finish(struct connection *conn)
+ {
++	struct iscsi_login_req_hdr *req =
++			(struct iscsi_login_req_hdr *)&conn->req.bhs;
++	struct session *session =
++			session_find_name(conn->tid, conn->initiator, req->sid);
++
+ 	switch (conn->session_type) {
+ 	case SESSION_NORMAL:
++		if (session) {
++			if (!req->sid.id.tsih) {
++				/* session reinstatement */
++				log_debug(1, "session %#" PRIx64 " reinstated",
++					req->sid.id64);
++				if (session_remove(session)) {
++					login_rsp_tgt_err(conn,
++						ISCSI_STATUS_TARGET_ERROR);
++					return;
++				}
++			} else if (req->sid.id.tsih != session->sid.id.tsih) {
++				/* fail the login */
++				login_rsp_ini_err(conn,
++					ISCSI_STATUS_SESSION_NOT_FOUND);
++				return;
++			}
++			/* add connection to existing session */
++			log_debug(1, "connection %u added to session %#" PRIx64,
++				conn->cid, req->sid.id64);
++			conn->session = session;
++		} else if (req->sid.id.tsih) {
++			/* fail the login */
++			login_rsp_ini_err(conn, ISCSI_STATUS_SESSION_NOT_FOUND);
++			return;
++		}
+ 		/* create or re-create in case the session closed */
+ 		if (session_create(conn)) {
+ 			login_rsp_tgt_err(conn, ISCSI_STATUS_TARGET_ERROR);
+ 			return;
+ 		}
+-		conn->sid = conn->session->sid;
+ 		break;
+ 	case SESSION_DISCOVERY:
+ 		/* set a dummy tsih value */
+@@ -680,7 +671,6 @@
+ 			case STATE_SECURITY:
+ 			case STATE_SECURITY_DONE:
+ 				conn->state = STATE_SECURITY_LOGIN;
+-				login_security_done(conn);
+ 				break;
+ 			default:
+ 				goto init_err;
+@@ -696,7 +686,6 @@
+ 					break;
+ 				}
+ 				conn->state = STATE_SECURITY_FULL;
+-				login_security_done(conn);
+ 				break;
+ 			case STATE_LOGIN:
+ 				if (stay)
+diff -uraN iscsitarget-1.4.20.2/usr/isns.c iscsitarget-1.4.20.2-r481/usr/isns.c
+--- iscsitarget-1.4.20.2/usr/isns.c	2010-07-01 17:17:20.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/usr/isns.c	2012-04-28 17:30:33.146260602 -0400
+@@ -593,11 +593,9 @@
+ static char *print_scn_pdu(struct isns_hdr *hdr)
+ {
+ 	struct isns_tlv *tlv = (struct isns_tlv *) hdr->pdu;
+-	uint16_t function, length, flags, transaction, sequence;
++	uint16_t length = ntohs(hdr->length);
+ 	char *name = NULL;
+ 
+-	get_hdr_param(hdr, function, length, flags, transaction, sequence);
+-
+ 	while (length) {
+ 		uint32_t vlen = ntohl(tlv->length);
+ 
+@@ -644,15 +642,14 @@
+ static void qry_rsp_handle(struct isns_hdr *hdr)
+ {
+ 	struct isns_tlv *tlv;
+-	uint16_t function, length, flags, transaction, sequence;
++	uint16_t length = ntohs(hdr->length);
++	uint16_t transaction = ntohs(hdr->transaction);
+ 	uint32_t status = (uint32_t) (*hdr->pdu);
+ 	struct isns_qry_mgmt *mgmt, *n;
+ 	struct target *target;
+ 	struct isns_initiator *ini;
+ 	char *name = NULL;
+ 
+-	get_hdr_param(hdr, function, length, flags, transaction, sequence);
+-
+ 	list_for_each_entry_safe(mgmt, n, &qry_list, qlist) {
+ 		if (mgmt->transaction == transaction) {
+ 			remque(&mgmt->qlist);
+@@ -751,8 +748,7 @@
+ 	int err;
+ 	struct isns_io *rx = &isns_rx;
+ 	struct isns_hdr *hdr = (struct isns_hdr *) rx->buf;
+-	uint32_t result;
+-	uint16_t function, length, flags, transaction, sequence;
++	uint16_t function;
+ 	char *name = NULL;
+ 
+ 	if (is_timeout)
+@@ -770,8 +766,7 @@
+ 		return err;
+ 	}
+ 
+-	get_hdr_param(hdr, function, length, flags, transaction, sequence);
+-	result = ntohl((uint32_t) hdr->pdu[0]);
++	function = ntohs(hdr->function);
+ 
+ 	switch (function) {
+ 	case ISNS_FUNC_DEV_ATTR_REG_RSP:
+@@ -852,7 +847,7 @@
+ 	int err;
+ 	struct isns_io *rx = &scn_rx;
+ 	struct isns_hdr *hdr = (struct isns_hdr *) rx->buf;
+-	uint16_t function, length, flags, transaction, sequence;
++	uint16_t function, transaction;
+ 	char *name = NULL;
+ 
+ 	log_error("%s %d: %d", __FUNCTION__, __LINE__, is_accept);
+@@ -872,7 +867,8 @@
+ 		return err;
+ 	}
+ 
+-	get_hdr_param(hdr, function, length, flags, transaction, sequence);
++	function = ntohs(hdr->function);
++	transaction = ntohs(hdr->transaction);
+ 
+ 	switch (function) {
+ 	case ISNS_FUNC_SCN:
+diff -uraN iscsitarget-1.4.20.2/usr/param.c iscsitarget-1.4.20.2-r481/usr/param.c
+--- iscsitarget-1.4.20.2/usr/param.c	2009-10-08 14:30:14.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/usr/param.c	2012-04-28 17:30:33.143260635 -0400
+@@ -78,20 +78,16 @@
+ 	return err;
+ }
+ 
+-static int or_set_val(struct iscsi_param *param, int idx, unsigned int *val)
++static void or_set_val(struct iscsi_param *param, int idx, unsigned int *val)
+ {
+ 	*val |= param[idx].val;
+ 	param[idx].val = *val;
+-
+-	return 0;
+ }
+ 
+-static int and_set_val(struct iscsi_param *param, int idx, unsigned int *val)
++static void and_set_val(struct iscsi_param *param, int idx, unsigned int *val)
+ {
+ 	*val &= param[idx].val;
+ 	param[idx].val = *val;
+-
+-	return 0;
+ }
+ 
+ static int minimum_check_val(struct iscsi_key *key, unsigned int *val)
+@@ -118,35 +114,35 @@
+ 	return 0;
+ }
+ 
+-static int minimum_set_val(struct iscsi_param *param, int idx, unsigned int *val)
++static void minimum_set_val(struct iscsi_param *param, int idx, unsigned int *val)
+ {
+ 	if (*val > param[idx].val)
+ 		*val = param[idx].val;
+ 	else
+ 		param[idx].val = *val;
+-
+-	return 0;
+ }
+ 
+-static int maximum_set_val(struct iscsi_param *param, int idx, unsigned int *val)
++static void maximum_set_val(struct iscsi_param *param, int idx, unsigned int *val)
+ {
+ 	if (param[idx].val > *val)
+ 		*val = param[idx].val;
+ 	else
+ 		param[idx].val = *val;
+-
+-	return 0;
+ }
+ 
+ static int digest_val_to_str(unsigned int val, char *str)
+ {
+ 	int err = 0;
+ 
+-	if (val & DIGEST_CRC32C)
+-		strcpy(str, "CRC32C");
+-	else if (val & DIGEST_NONE)
++	if (val & DIGEST_NONE)
+ 		strcpy(str, "None");
+-	else
++	if (val & DIGEST_CRC32C) {
++		if (strlen(str))
++			strcat(str, ",CRC32C");
++		else
++			strcpy(str, "CRC32C");
++	}
++	if (!strlen(str))
+ 		err = -EINVAL;
+ 
+ 	return err;
+@@ -158,25 +154,23 @@
+ 	char *p, *q;
+ 	p = str;
+ 
+-	*val = DIGEST_NONE;
++	*val = 0;
+ 	do {
+-		if (!strncmp(p, "None", strlen("None")))
++		q = strsep(&p, ",");
++		if (!strcmp(q, "None"))
+ 			*val |= DIGEST_NONE;
+-		else if (!strncmp(p, "CRC32C", strlen("CRC32C")))
++		else if (!strcmp(q, "CRC32C"))
+ 			*val |= DIGEST_CRC32C;
+ 		else {
+ 			err = -EINVAL;
+ 			break;
+ 		}
+-
+-		if ((q = strchr(p, ',')))
+-			p = q + 1;
+-	} while (q);
++	} while (p);
+ 
+ 	return err;
+ }
+ 
+-static int digest_set_val(struct iscsi_param *param, int idx, unsigned int *val)
++static void digest_set_val(struct iscsi_param *param, int idx, unsigned int *val)
+ {
+ 	if (*val & DIGEST_CRC32C && param[idx].val & DIGEST_CRC32C)
+ 		*val = DIGEST_CRC32C;
+@@ -184,8 +178,6 @@
+ 		*val = DIGEST_NONE;
+ 
+ 	param[idx].val = *val;
+-
+-	return 0;
+ }
+ 
+ static int marker_val_to_str(unsigned int val, char *str)
+@@ -198,7 +190,7 @@
+ 	return 0;
+ }
+ 
+-static int marker_set_val(struct iscsi_param *param, int idx, unsigned int *val)
++static void marker_set_val(struct iscsi_param *param, int idx, unsigned int *val)
+ {
+ 	if ((idx == key_ofmarkint && param[key_ofmarker].state == KEY_STATE_DONE) ||
+ 	    (idx == key_ifmarkint && param[key_ifmarker].state == KEY_STATE_DONE))
+@@ -207,8 +199,6 @@
+ 		*val = 1;
+ 
+ 	param[idx].val = *val;
+-
+-	return 0;
+ }
+ 
+ int param_val_to_str(struct iscsi_key *keys, int idx, unsigned int val, char *str)
+@@ -235,13 +225,11 @@
+ 		return 0;
+ }
+ 
+-int param_set_val(struct iscsi_key *keys, struct iscsi_param *param,
++void param_set_val(struct iscsi_key *keys, struct iscsi_param *param,
+ 		  int idx, unsigned int *val2)
+ {
+ 	if (keys[idx].ops->set_val)
+-		return keys[idx].ops->set_val(param, idx, val2);
+-	else
+-		return 0;
++		keys[idx].ops->set_val(param, idx, val2);
+ }
+ 
+ static struct iscsi_key_ops minimum_ops = {
+diff -uraN iscsitarget-1.4.20.2/usr/param.h iscsitarget-1.4.20.2-r481/usr/param.h
+--- iscsitarget-1.4.20.2/usr/param.h	2005-11-28 01:43:23.000000000 -0500
++++ iscsitarget-1.4.20.2-r481/usr/param.h	2012-04-28 17:30:33.144260624 -0400
+@@ -18,7 +18,7 @@
+ 	int (*val_to_str)(unsigned int, char *);
+ 	int (*str_to_val)(char *, unsigned int *);
+ 	int (*check_val)(struct iscsi_key *, unsigned int *);
+-	int (*set_val)(struct iscsi_param *, int, unsigned int *);
++	void (*set_val)(struct iscsi_param *, int, unsigned int *);
+ };
+ 
+ struct iscsi_key {
+@@ -37,6 +37,6 @@
+ extern int param_val_to_str(struct iscsi_key *, int, unsigned int, char *);
+ extern int param_str_to_val(struct iscsi_key *, int, char *, unsigned int *);
+ extern int param_check_val(struct iscsi_key *, int, unsigned int *);
+-extern int param_set_val(struct iscsi_key *, struct iscsi_param *, int, unsigned int *);
++extern void param_set_val(struct iscsi_key *, struct iscsi_param *, int, unsigned int *);
+ 
+ #endif
+diff -uraN iscsitarget-1.4.20.2/usr/plain.c iscsitarget-1.4.20.2-r481/usr/plain.c
+--- iscsitarget-1.4.20.2/usr/plain.c	2010-03-08 12:15:53.000000000 -0500
++++ iscsitarget-1.4.20.2-r481/usr/plain.c	2012-04-28 17:30:33.144260624 -0400
+@@ -322,8 +322,9 @@
+ 	uint32_t mbit;
+ 	uint8_t family = sa1->sa_family;
+ 
++	errno = 0;
+ 	mbit = strtoul(buf, NULL, 0);
+-	if (mbit < 0 ||
++	if ((mbit == ULONG_MAX && errno != 0) ||
+ 	    (family == AF_INET && mbit > 31) ||
+ 	    (family == AF_INET6 && mbit > 127))
+ 		return 0;
+@@ -691,10 +692,12 @@
+ 	return __plain_param_set(tid, sid, type, 1 << key, param, 0);
+ }
+ 
+-static void plain_portal_init(FILE *fp, char **isns, int *isns_ac)
++static void plain_portal_init(FILE *fp, int *timeout)
+ {
+ 	char buf[BUFSIZE];
+ 	char *p, *q;
++	char *isns = NULL;
++	int isns_ac = 0;
+ 
+ 	while (fgets(buf, BUFSIZE, fp)) {
+ 		q = buf;
+@@ -702,15 +705,16 @@
+ 		if (!p || *p == '#')
+ 			continue;
+ 		if (!strcasecmp(p, "iSNSServer")) {
+-			*isns = strdup(target_sep_string(&q));
++			isns = strdup(target_sep_string(&q));
+ 		} else if (!strcasecmp(p, "iSNSAccessControl")) {
+ 			char *str = target_sep_string(&q);
+ 			if (!strcasecmp(str, "Yes"))
+-				*isns_ac = 1;
++				isns_ac = 1;
+ 		}
+ 	}
+ 
+-	return;
++	if (isns)
++		*timeout = isns_init(isns, isns_ac);
+ }
+ 
+ static void plain_target_init(FILE *fp)
+@@ -796,7 +800,7 @@
+ 	return;
+ }
+ 
+-static void plain_init(char *params, char **isns, int *isns_ac)
++static void plain_init(char *params, int *timeout)
+ {
+ 	FILE *fp;
+ 	struct stat st;
+@@ -826,7 +830,7 @@
+ 		}
+ 	}
+ 
+-	plain_portal_init(fp, isns, isns_ac);
++	plain_portal_init(fp, timeout);
+ 
+ 	rewind(fp);
+ 
+diff -uraN iscsitarget-1.4.20.2/usr/session.c iscsitarget-1.4.20.2-r481/usr/session.c
+--- iscsitarget-1.4.20.2/usr/session.c	2010-06-30 13:32:55.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/usr/session.c	2012-04-28 17:30:33.147260591 -0400
+@@ -102,8 +102,10 @@
+ 		session->initiator = strdup(conn->initiator);
+ 
+ 		conn->session = session;
++		conn->sid = session->sid;
+ 	} else {
+ 		session = conn->session;
++		conn->sid = session->sid;
+ 
+ 		if (session_exist(conn->tid, session->sid.id64))
+ 			return 0;
+diff -uraN iscsitarget-1.4.20.2/usr/target.c iscsitarget-1.4.20.2-r481/usr/target.c
+--- iscsitarget-1.4.20.2/usr/target.c	2010-06-29 17:59:28.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/usr/target.c	2012-04-28 17:30:33.148260580 -0400
+@@ -78,6 +78,9 @@
+ {
+ 	char taddr[NI_MAXHOST + NI_MAXSERV + 5];
+ 
++	/* strip ipv6 zone id */
++	addr = strsep(&addr, "%");
++
+ 	snprintf(taddr, sizeof(taddr),
+ 		(family == AF_INET) ? "%s:%d,1" : "[%s]:%d,1",
+ 							addr, server_port);
+diff -uraN iscsitarget-1.4.20.2/usr/types.h iscsitarget-1.4.20.2-r481/usr/types.h
+--- iscsitarget-1.4.20.2/usr/types.h	2010-04-13 10:53:30.000000000 -0400
++++ iscsitarget-1.4.20.2-r481/usr/types.h	2012-04-28 17:30:33.145260613 -0400
+@@ -14,6 +14,7 @@
+ #include <inttypes.h>
+ 
+ #if __BYTE_ORDER == __BIG_ENDIAN
++
+ #define cpu_to_le16(x)		bswap_16(x)
+ #define le16_to_cpu(x)		bswap_16(x)
+ #define cpu_to_le32(x)		bswap_32(x)
+@@ -22,6 +23,9 @@
+ #define be16_to_cpu(x)		(x)
+ #define cpu_to_be32(x)		(x)
+ #define be32_to_cpu(x)		(x)
++#define cpu_to_be64(x)		(x)
++#define be64_to_cpu(x)		(x)
++
+ #elif __BYTE_ORDER == __LITTLE_ENDIAN
+ #define cpu_to_le16(x)		(x)
+ #define le16_to_cpu(x)		(x)
+@@ -31,6 +35,9 @@
+ #define be16_to_cpu(x)		bswap_16(x)
+ #define cpu_to_be32(x)		bswap_32(x)
+ #define be32_to_cpu(x)		bswap_32(x)
++#define cpu_to_be64(x)		bswap_64(x)
++#define be64_to_cpu(x)		bswap_64(x)
++
+ #else
+ #error "unknown endianess!"
+ #endif
