@@ -73,3 +73,11 @@ src_install() {
 	unset ARCH
 	linux-mod_src_install || die
 }
+
+pkg_postinst() {
+
+	linux-mod_pkg_postinst
+
+	elog "Please add \"iscsi_trgt\" to /etc/conf.d/modules"
+}
+
