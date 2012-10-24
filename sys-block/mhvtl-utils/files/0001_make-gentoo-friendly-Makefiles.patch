@@ -1,0 +1,27 @@
+diff -ur mhvtl-1.4.old/man/Makefile mhvtl-1.4/man/Makefile
+--- mhvtl-1.4.old/man/Makefile	2012-08-07 22:08:14.000000000 -0400
++++ mhvtl-1.4/man/Makefile	2012-10-24 09:25:47.569523811 -0400
+@@ -52,13 +52,13 @@
+ install:
+ 	install -d -m 755 $(DESTDIR)$(PREFIX)$(MANDIR)/man1
+ 	install -d -m 755 $(DESTDIR)$(PREFIX)$(MANDIR)/man5
+-	install -o $(USER) mhvtl.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
+-	install -o $(USER) mktape.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
+-	install -o $(USER) vtlcmd.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
+-	install -o $(USER) vtltape.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
+-	install -o $(USER) vtllibrary.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
+-	install -o $(USER) make_vtl_media.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
+-	install -o $(USER) build_library_config.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
+-	install -o $(USER) mhvtl.conf.5 $(DESTDIR)$(PREFIX)$(MANDIR)/man5/
+-	install -o $(USER) device.conf.5 $(DESTDIR)$(PREFIX)$(MANDIR)/man5/
+-	install -o $(USER) library_contents.5 $(DESTDIR)$(PREFIX)$(MANDIR)/man5/
++	install -o $(SUSER) mhvtl.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
++	install -o $(SUSER) mktape.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
++	install -o $(SUSER) vtlcmd.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
++	install -o $(SUSER) vtltape.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
++	install -o $(SUSER) vtllibrary.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
++	install -o $(SUSER) make_vtl_media.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
++	install -o $(SUSER) build_library_config.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
++	install -o $(SUSER) mhvtl.conf.5 $(DESTDIR)$(PREFIX)$(MANDIR)/man5/
++	install -o $(SUSER) device.conf.5 $(DESTDIR)$(PREFIX)$(MANDIR)/man5/
++	install -o $(SUSER) library_contents.5 $(DESTDIR)$(PREFIX)$(MANDIR)/man5/
