@@ -1,0 +1,10 @@
+--- classes/x11/x11src.cc
++++ classes/x11/x11src.cc
+@@ -83,6 +83,7 @@
+ #include <locale.h>
+ #include <sys/time.h>
+ #include <sys/wait.h>
++#include <sys/stat.h>
+ #ifdef HAVE_LINUX_PTHREAD
+  #include <pthread.h>
+ #endif

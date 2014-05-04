@@ -1,0 +1,11 @@
+--- tvision/include/tv/textdev.h
++++ tvision/include/tv/textdev.h
+@@ -16,6 +16,8 @@
+ #if defined( Uses_TTextDevice ) && !defined( __TTextDevice )
+ #define __TTextDevice
+ 
++#include <stdio.h>
++
+ class TRect;
+ class TScrollBar;
+ 
