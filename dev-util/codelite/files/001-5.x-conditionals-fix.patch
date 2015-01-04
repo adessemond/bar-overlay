@@ -1,0 +1,52 @@
+diff -ur codelite-5.2.old/CMakeLists.txt codelite-5.2/CMakeLists.txt
+--- codelite-5.2.old/CMakeLists.txt	2015-01-04 08:09:40.308318233 -0500
++++ codelite-5.2/CMakeLists.txt	2015-01-04 08:15:12.613935073 -0500
+@@ -106,16 +106,16 @@
+ endif(PREFIX)
+ 
+ ## enable clang support?
+-if(ENABLE_CLANG MATCHES 0)
++if(NOT ENABLE_CLANG)
+   set( USE_CLANG 0 )
+-endif (ENABLE_CLANG MATCHES 0)
++endif ()
+ unset(ENABLE_CLANG CACHE)
+ 
+-if (AUTOGEN_REVISION MATCHES 0)
++if (NOT AUTOGEN_REVISION)
+     set ( MAKE_AUTOGEN_REVISION_STRING 0)
+-else (AUTOGEN_REVISION MATCHES 1)
++else ()
+     set ( MAKE_AUTOGEN_REVISION_STRING 1)
+-endif (AUTOGEN_REVISION MATCHES 0)
++endif ()
+ unset(AUTOGEN_REVISION CACHE)
+ 
+ ## build wxCrafter?
+@@ -128,7 +128,7 @@
+ unset(WITH_WXC CACHE)
+ 
+ ## package the wx libs?
+-if (COPY_WX_LIBS MATCHES 1)
++if (COPY_WX_LIBS)
+   set( CL_COPY_WX_LIBS 1 )
+ endif()
+ unset(COPY_WX_LIBS CACHE)
+@@ -173,7 +173,7 @@
+     endif(CMAKE_COMPILER_IS_GNUCXX)
+ 
+     ## In debug, only add NDEBUG if the user says so
+-    if (PREVENT_WX_ASSERTS MATCHES 1)
++    if (PREVENT_WX_ASSERTS)
+     message("-- Adding -DNDEBUG to definitions")
+         add_definitions(-DNDEBUG)
+     endif()
+@@ -203,7 +203,7 @@
+     endif(CMAKE_COMPILER_IS_GNUCXX)
+     
+     ## In release, add NDEBUG unless explicitly told not to
+-    if (NOT PREVENT_WX_ASSERTS MATCHES 0)
++    if (PREVENT_WX_ASSERTS)
+     message("-- Adding -DNDEBUG to definitions")
+         add_definitions(-DNDEBUG)
+     endif()
