@@ -1,5 +1,5 @@
 # Copyright 1999-2013 Gentoo Foundation
-# Copyright 2015 Adrien Dessemond «adrien.dessemond@funtoo.org»
+# Copyright 2015 Adrien Dessemond <adrien.dessemond@funtoo.org>
 # Distributed under the terms of the GNU General Public License v2
 # $Header: $
 
@@ -39,26 +39,21 @@ src_prepare () {
 }
 
 src_configure () {
-
         local mycmakeargs=(
                 "-DPLUGINS_DIR=/usr/libexec/codelite" \
                 "-DENABLE_LLDB=0"  \
+		$( cmake-utils_use_with mysql MYSQL ) \
+	        $( cmake-utils_use_with postgres POSTGRES ) \
+	        $( cmake-utils_use_with pch PCH ) \
+	        $( cmake-utils_use_enable clang CLANG ) \
         )
-
-        cmake-utils_use_with mysql MYSQL
-        cmake-utils_use_with postgres POSTGRES
-
-        cmake-utils_use_with pch PCH
-        cmake-utils_use_enable clang CLANG
 
         use debug && CMAKE_BUILD_TYPE="Debug" || CMAKE_BUILD_TYPE="Release"
 
         cmake-utils_src_configure
-
 }
 
 src_install () {
-	#emake -j1 DESTDIR="${D}" install || die "install failed"
 	cmake-utils_src_install
 	dodoc AUTHORS
 

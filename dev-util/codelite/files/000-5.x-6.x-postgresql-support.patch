@@ -5,7 +5,7 @@ diff -ur codelite-5.2/DatabaseExplorer/CMakeLists.txt codelite-5.2.new/DatabaseE
      add_definitions( -DDBL_USE_MYSQL=1 )
  endif ( WITH_MYSQL )
  
-+if ( WITH_POSTGRESQ )
++if ( WITH_POSTGRES )
 +    add_definitions( -DDBL_USE_POSTGRES=1 )
 +endif ()
 +
@@ -15,14 +15,16 @@ diff -ur codelite-5.2/DatabaseExplorer/CMakeLists.txt codelite-5.2.new/DatabaseE
 diff -ur codelite-5.2/sdk/databaselayer/CMakeLists.txt codelite-5.2.new/sdk/databaselayer/CMakeLists.txt
 --- codelite-5.2/sdk/databaselayer/CMakeLists.txt	2013-07-10 23:33:52.000000000 -0400
 +++ codelite-5.2.new/sdk/databaselayer/CMakeLists.txt	2015-01-03 12:43:10.242403140 -0500
-@@ -47,6 +47,12 @@
+@@ -47,6 +47,14 @@
      FILE(GLOB MYSQL_SRCS "src/dblayer/Mysql*.cpp")
  endif ( WITH_MYSQL )
  
-+if ( WITH_POSTGRESQ )
++if ( WITH_POSTGRES )
 +    add_definitions( -DDBL_USE_POSTGRES=1 )
 +    FILE(GLOB MYSQL_SRCS "src/dblayer/Postgres*.cpp")
 +    message("-- Adding PostgreSQL support")
++else( )
++    message("-- PostgreSQL support disabled")
 +endif ( )
 +
  # Define the output
