@@ -1,28 +1,11 @@
---- man/Makefile.old	2013-12-18 10:22:41.168874063 -0500
-+++ man/Makefile	2013-12-18 10:23:26.032008167 -0500
-@@ -52,14 +52,14 @@
- install:
- 	install -d -m 755 $(DESTDIR)$(PREFIX)$(MANDIR)/man1
- 	install -d -m 755 $(DESTDIR)$(PREFIX)$(MANDIR)/man5
--	install -o $(USER) mhvtl.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
--	install -o $(USER) mktape.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
--	install -o $(USER) vtlcmd.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
--	install -o $(USER) vtltape.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
--	install -o $(USER) edit_tape.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
--	install -o $(USER) vtllibrary.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
--	install -o $(USER) make_vtl_media.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
--	install -o $(USER) build_library_config.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
--	install -o $(USER) mhvtl.conf.5 $(DESTDIR)$(PREFIX)$(MANDIR)/man5/
--	install -o $(USER) device.conf.5 $(DESTDIR)$(PREFIX)$(MANDIR)/man5/
--	install -o $(USER) library_contents.5 $(DESTDIR)$(PREFIX)$(MANDIR)/man5/
-+	install -o $(SUSER) mhvtl.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
-+	install -o $(SUSER) mktape.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
-+	install -o $(SUSER) vtlcmd.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
-+	install -o $(SUSER) vtltape.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
-+	install -o $(SUSER) edit_tape.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
-+	install -o $(SUSER) vtllibrary.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
-+	install -o $(SUSER) make_vtl_media.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
-+	install -o $(SUSER) build_library_config.1 $(DESTDIR)$(PREFIX)$(MANDIR)/man1/
-+	install -o $(SUSER) mhvtl.conf.5 $(DESTDIR)$(PREFIX)$(MANDIR)/man5/
-+	install -o $(SUSER) device.conf.5 $(DESTDIR)$(PREFIX)$(MANDIR)/man5/
-+	install -o $(SUSER) library_contents.5 $(DESTDIR)$(PREFIX)$(MANDIR)/man5/
+--- man/Makefile.old	2015-07-27 07:53:40.727083071 -0400
++++ man/Makefile	2015-07-27 07:53:56.530169881 -0400
+@@ -37,7 +37,7 @@
+ 
+ PREFIX ?= /usr
+ USR ?= vtl
+-SUSER = root
++SUSER =  $(SUSER)
+ GROUP ?= vtl
+ MHVTL_HOME_PATH ?= /opt/mhvtl
+ MHVTL_CONFIG_PATH ?= /etc/mhvtl

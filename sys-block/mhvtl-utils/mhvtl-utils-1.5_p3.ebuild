@@ -37,7 +37,8 @@ pkg_setup() {
 }
 
 src_prepare() {
-	epatch "${FILESDIR}/0001_make-gentoo-friendly-Makefiles-1.5.patch"
+	epatch "${FILESDIR}/0001_make-gentoo-friendly-Makefiles-1.5_p3.patch"
+	epatch "${FILESDIR}/0002_make-vtl-media-not-failling-with-nologin.patch"
 }
 
 src_compile() {
